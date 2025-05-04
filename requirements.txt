@@ -1,0 +1,4 @@
+google-generativeai>=0.3.0
+pyaudio==0.2.13
+asyncio>=3.4.3
+vosk==0.3.45 
