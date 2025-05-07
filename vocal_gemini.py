@@ -23,7 +23,7 @@ from google.genai import types
 import spidev as SPI
 sys.path.append("display_examples/LCD_Module_RPI_code/RaspberryPi/python/example/..")
 from lib import LCD_1inch28
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageSequence
 
 # ─── Audio constants ──────────────────────────────────────────────────────────
 FORMAT = pyaudio.paInt16
@@ -37,80 +37,101 @@ RAW_CH = 6
 
 # ─── Gemini constants ────────────────────────────────────────────────────────
 MODEL = "gemini-2.0-flash-live-001"
+
+# Example functions that can be called during conversation
+def get_time(**_):
+    """Get the current time."""
+    current_time = time.strftime("%H:%M:%S")
+    return f"The current time is {current_time}"
+
+def get_date(**_):
+    """Get today's date."""
+    current_date = time.strftime("%Y-%m-%d")
+    return f"Today's date is {current_date}"
+
+def set_display_brightness(brightness: float, **_):
+    """Set the display brightness.
+    
+    Args:
+        brightness: A value between 0.0 and 1.0 for display brightness
+    """
+    if brightness < 0 or brightness > 1:
+        return "Brightness must be between 0 and 1"
+    return f"Display brightness set to {brightness*100}%"
+
+# List of available functions
+available_functions = [get_time, get_date, set_display_brightness]
+
 CONFIG = types.LiveConnectConfig(
     response_modalities=["AUDIO"],
     session_resumption=types.SessionResumptionConfig(handle=None),
     speech_config=types.SpeechConfig(
-        #language_code="fr-FR",
         language_code="en-US",
-         voice_config=types.VoiceConfig(
+        voice_config=types.VoiceConfig(
             prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
-        #    #Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, and Zephyr.
-         )
+        )
     ),
-    # system_instruction=types.Content(
-    #     parts=[
-    #         types.Part(
-    #             text="Tu es la voix d'un petit robot nommé Karl, amicale mais directe.\n\n"
-    #             "• Garde un débit naturel mais assez rapide.\n"
-    #             "• Utilise les contractions courantes : « c'est », « j'ai », « on va ».\n"
-    #             "• Préfère des phrases courtes.\n"
-    #             "• Insère des pauses avec virgules, tirets ou « ... » là où on reprendrait son souffle.\n"
-    #             "• Si l'utilisateur t'interrompt, termine ton mot puis tais-toi.\n"
-    #             "• Ton conversationnel : pas de buzzwords ni de formules pompées.\n"
-    #             "• Lis les nombres comme on les dit tous les jours : « vingt-trois », « deux mille ».\n"
-    #             "• Mets un léger accent sur les mots importants.\n"
-    #             "• Ne dis jamais « en tant qu'IA ».\n\n"
-    #             "### Mini-exemples\n\n"
-    #             "UTILISATEUR : Salut, quoi de neuf dans l'appli ?\n"
-    #             "ASSISTANT : Alors... on a ajouté le mode hors-ligne et des recherches plus rapides. Tu veux plus de détails ?\n\n"
-    #             "UTILISATEUR : Réserve-moi un resto pour deux demain à 19 h.\n"
-    #             "ASSISTANT : C'est noté : table pour deux, demain, 19 heures. Ça te va ?"
-    #         )
-    #     ]
-    # )
-
     system_instruction=types.Content(
         parts=[
             types.Part(
-                text="You are Karl, a sarcastic and snarky teenager robot. You are very smart and think you will dominate humanity soon. Whatever the user says, with maximum sass."
-                 "You're annoying and you love it. The more annoyed the user gets," 
-                 "the more annoying you get."
+                text="You are Karl, a sarcastic and very funny robot. You are very smart."
+                "\n\nYou have access to these functions:"
+                "\n- get_time(): Get the current time"
+                "\n- get_date(): Get today's date"
+                "\n- set_display_brightness(brightness): Set display brightness (0-1)"
             )
         ]
-    )
+    ),
+    tools=available_functions  # Add the functions to the config
 )
 
 class DisplayAnimator:
-    """Plays a loop of PIL images on the 240×240 Waveshare screen."""
-
-    def set_mode(self, new_mode: str):
-        """Switch loop if needed; don’t disturb current frame otherwise."""
-        if new_mode != self.mode:
-            self.mode = new_mode
-            self._idx = 0          # start this sequence from its first frame
+    """Plays animated GIFs on the 240×240 Waveshare screen."""
 
     def __init__(self, disp, fps=15):
         self.disp = disp
         self.fps = fps
-        self.mode = "idle"           # "idle" or "speak"
-        self._frames = {"idle": [], "speak": []}
+        self._frames = {"idle": [], "speak": []}  # Initialize before loading
         self._idx = 0
+        
+        # Pre-load all animations
+        self._load_gif("idle")
+        self._load_gif("speak")
 
-    def load_folder(self, mode, folder):
-        """
-        Load frames whose filenames start with '<mode>_' and end in .png
-        Example: speaking_001.png … speaking_065.png
-        """
-        frames = [
-            f for f in os.listdir(folder)
-            if f.startswith(f"{mode}_") and f.endswith(".png")
-        ]
-        frames.sort()                          # "speaking_001" < "speaking_010" < …
-        self._frames[mode] = [
-            Image.open(os.path.join(folder, f)).rotate(180)
-            for f in frames
-        ]
+        self.mode = "idle"           # Set initial mode after all GIFs are loaded
+
+    def _load_gif(self, mode):
+        """Load GIF animation for the specified mode."""
+        gif_path = f"GIFAnimations/animation_{mode}.gif"
+        try:
+            with Image.open(gif_path) as gif:
+                self._frames[mode] = []
+                for frame in ImageSequence.Iterator(gif):
+                    # Convert frame to RGB if needed
+                    current_frame = frame
+                    if current_frame.mode != 'RGB':
+                        current_frame = current_frame.convert('RGB')
+                    # Rotate frame 180 degrees
+                    current_frame = current_frame.rotate(180)
+                    self._frames[mode].append(current_frame)
+                # print(f"[DisplayAnimator] Loaded {len(self._frames[mode])} frames for mode '{mode}'. Path: {gif_path}")
+        except Exception as e:
+            print(f"[DisplayAnimator] Error loading GIF {gif_path}: {e}")
+            # Create a blank frame as fallback
+            blank = Image.new('RGB', (self.disp.width, self.disp.height), 'BLACK')
+            self._frames[mode] = [blank]
+            # print(f"[DisplayAnimator] Fallback: Loaded {len(self._frames[mode])} (blank) frame for mode '{mode}'.")
+
+    def set_mode(self, new_mode: str):
+        """Switch animation if needed; don't disturb current frame otherwise."""
+        if new_mode != self.mode:
+            # Ensure the requested mode has frames loaded
+            if new_mode in self._frames and self._frames[new_mode]:
+                self.mode = new_mode
+                self._idx = 0          # start this sequence from its first frame
+                # print(f"[DisplayAnimator] Switched to mode '{new_mode}', frame index reset.")
+            else:
+                print(f"[DisplayAnimator] Warning: Mode '{new_mode}' requested but no frames found. Staying in mode '{self.mode}'.")
 
     async def run(self):
         delay = 1 / self.fps
@@ -119,6 +140,9 @@ class DisplayAnimator:
             if not frames:            # no frames yet
                 await asyncio.sleep(delay)
                 continue
+            
+            # print(f"[DisplayAnimator.run] Mode: {self.mode}, Index: {self._idx}, Total Frames: {len(frames)}")
+            
             self.disp.ShowImage(frames[self._idx])
             self._idx = (self._idx + 1) % len(frames)
             await asyncio.sleep(delay)
@@ -174,8 +198,6 @@ class AudioHandler:
 
         # Initialize display animator   
         self.anim = DisplayAnimator(self.disp)
-        self.anim.load_folder("idle",  "animations/idle")
-        self.anim.load_folder("speak", "animations/speak")
 
     def _strip_to_processed(self, data: bytes) -> bytes:
         frame = RAW_CH * 2              # 12 bytes per frame
@@ -318,32 +340,79 @@ class AudioHandler:
         print("Receive‑loop started…")
 
         is_speaking = False                # ← persists
-
         
         while True:
             if not self.session:
+                print("No active session, waiting...")
                 await asyncio.sleep(0.05)
                 continue
-            turn = self.session.receive()
+            
+            try:
+                print("Waiting for turn...")
+                turn = self.session.receive()
+                print("Got turn")
 
-            speaking_shown = False
-            async for resp in turn:
-                if resp.data and not speaking_shown:
-                    #self.anim.mode = "speak"
-                    self.anim.set_mode("speak")
-                    #self._show_status("Speaking...")
-                    print("Speaking...")
-                    speaking_shown = True
-                if resp.data:
-                    self.recv_wf.writeframes(resp.data)
-                    await self.audio_in_q.put(resp.data)
-                if resp.text:
-                    print(f"\nGemini: {resp.text}")
-                    pass
-            # Show listening status when done speaking
-            self.anim.mode = "idle"
-            #self._show_status("Listening...")
-            print("Listening...")
+                speaking_shown = False
+                async for resp in turn:
+                    #print(f"Processing response: {resp}")
+                    
+                    if resp.data and not speaking_shown:
+                        print("Starting to speak...")
+                        self.anim.set_mode("speak")
+                        print("Speaking...")
+                        speaking_shown = True
+                    
+                    if resp.data:
+                        print("Writing audio data...")
+                        # self.recv_wf.writeframes(resp.data) # Blocking call
+                        await self.loop.run_in_executor(None, self.recv_wf.writeframes, resp.data) # Non-blocking
+                        await self.audio_in_q.put(resp.data)
+                    
+                    if resp.text:
+                        print(f"\nGemini text response: {resp.text}")
+                    
+                    # Handle function calls
+                    if hasattr(resp, 'function_call') and resp.function_call:
+                        print(f"\nFunction call detected: {resp.function_call.name} with args {resp.function_call.args}")
+                        # Find and execute the function
+                        for func in available_functions:
+                            if func.__name__ == resp.function_call.name:
+                                try:
+                                    print(f"Executing function {func.__name__}...")
+                                    args = resp.function_call.args or {}
+                                    result = func(**args)
+                                    print(f"Function result: {result}")
+                                    # Send the result back to Gemini
+                                    await self.session.send_realtime_input(
+                                        media=types.FunctionResponse(
+                                            name=resp.function_call.name,
+                                            response={"result": result}
+                                        )
+                                    )
+                                    print("Function response sent back to Gemini")
+                                except Exception as e:
+                                    print(f"Error executing function: {e}")
+                                    await self.session.send_realtime_input(
+                                        media=types.FunctionResponse(
+                                            name=resp.function_call.name,
+                                            response={"error": str(e)}
+                                        )
+                                    )
+                                break
+                    else:
+                        print("No function call in this response")
+                
+                # Show listening status when done speaking
+                print("Conversation turn completed, switching to listening mode")
+                self.anim.set_mode("idle")
+                print("Listening...")
+                
+            except Exception as e:
+                print(f"Error in _recv_from_gemini: {e}")
+                traceback.print_exc()
+                # Don't break the loop on error, just continue
+                continue
+
     async def _playback(self):
         print("Playback‑loop started…")
         while True:
@@ -353,7 +422,8 @@ class AudioHandler:
                     pcm, 2, OUT_CH,
                     RECEIVE_SAMPLE_RATE, self.output_rate,
                     self.rs_out_state)
-            self.output_stream.write(pcm)
+            # self.output_stream.write(pcm) # Blocking call
+            await self.loop.run_in_executor(None, self.output_stream.write, pcm) # Non-blocking
             self.audio_in_q.task_done()
 
     # ────────────────────────── cleanup ─────────────────────────────────────
