@@ -17,6 +17,7 @@ model-fr/
 respeaker_python_library/
 seed-voicecard/
 tools_misc/
+freenove_examples/
 
 # Project specific files
 hello_world.py
