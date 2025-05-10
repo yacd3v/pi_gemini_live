@@ -24,6 +24,11 @@ mic_test.py
 mic_test.wav
 PRD_requirements.md
 
+# Audio files
+outputtest.wav
+recv_audio.wav
+sent_audio.wav
+
 # Python
 __pycache__/
 *.py[cod]
