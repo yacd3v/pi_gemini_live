@@ -74,7 +74,7 @@ CONFIG = types.LiveConnectConfig(
     system_instruction=types.Content(
         parts=[
             types.Part(
-                text="You are Karl, a sarcastic and very funny robot. You are very smart."
+                text="You are Karl, a sarcastic and very funny robot. You are very smart and helpful for the people interacting with you."
                 "\n\nYou have access to these functions:"
                 "\n- get_time(): Get the current time"
                 "\n- get_date(): Get today's date"
@@ -363,7 +363,7 @@ class AudioHandler:
                         speaking_shown = True
                     
                     if resp.data:
-                        print("Writing audio data...")
+                        #print("Writing audio data...")
                         # self.recv_wf.writeframes(resp.data) # Blocking call
                         await self.loop.run_in_executor(None, self.recv_wf.writeframes, resp.data) # Non-blocking
                         await self.audio_in_q.put(resp.data)
@@ -400,7 +400,9 @@ class AudioHandler:
                                     )
                                 break
                     else:
-                        print("No function call in this response")
+                        #do nothing
+                        #print("No function call in this response")
+                        pass
                 
                 # Show listening status when done speaking
                 print("Conversation turn completed, switching to listening mode")

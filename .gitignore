@@ -7,6 +7,23 @@ seeed-voicecard/
 tools_misc/usb_4_mic_array/
 usb_4_mic_array/
 
+# Project specific folders
+backups/
+animations/
+examples_and_documentation/
+model/
+model-en/
+model-fr/
+respeaker_python_library/
+seed-voicecard/
+tools_misc/
+
+# Project specific files
+hello_world.py
+mic_test.py
+mic_test.wav
+PRD_requirements.md
+
 # Python
 __pycache__/
 *.py[cod]
