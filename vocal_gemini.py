@@ -62,6 +62,36 @@ def set_display_brightness(brightness: float, **_):
 # List of available functions
 available_functions = [get_time, get_date, set_display_brightness]
 
+# Create a dictionary to map function names to function objects
+functions_map = {func.__name__: func for func in available_functions}
+
+# Define tools for the LiveConnectConfig
+tools_for_config = [
+    types.Tool(function_declarations=[
+        types.FunctionDeclaration(
+            name="get_time",
+            description="Get the current time.",
+            parameters=types.Schema(type='OBJECT', properties={})
+        ),
+        types.FunctionDeclaration(
+            name="get_date",
+            description="Get today's date.",
+            parameters=types.Schema(type='OBJECT', properties={})
+        ),
+        types.FunctionDeclaration(
+            name="set_display_brightness",
+            description="Set the display brightness.",
+            parameters=types.Schema(
+                type='OBJECT',
+                properties={
+                    'brightness': types.Schema(type='NUMBER', description="A value between 0.0 and 1.0 for display brightness")
+                },
+                required=['brightness']
+            )
+        )
+    ])
+]
+
 CONFIG = types.LiveConnectConfig(
     response_modalities=["AUDIO"],
     session_resumption=types.SessionResumptionConfig(handle=None),
@@ -75,14 +105,10 @@ CONFIG = types.LiveConnectConfig(
         parts=[
             types.Part(
                 text="You are Karl, a sarcastic and very funny robot. You are very smart and helpful for the people interacting with you."
-                "\n\nYou have access to these functions:"
-                "\n- get_time(): Get the current time"
-                "\n- get_date(): Get today's date"
-                "\n- set_display_brightness(brightness): Set display brightness (0-1)"
             )
         ]
     ),
-    tools=available_functions  # Add the functions to the config
+    tools=tools_for_config  # Use the new tools configuration
 )
 
 class DisplayAnimator:
@@ -371,39 +397,56 @@ class AudioHandler:
                     if resp.text:
                         print(f"\nGemini text response: {resp.text}")
                     
-                    # Handle function calls
-                    if hasattr(resp, 'function_call') and resp.function_call:
-                        print(f"\nFunction call detected: {resp.function_call.name} with args {resp.function_call.args}")
-                        # Find and execute the function
-                        for func in available_functions:
-                            if func.__name__ == resp.function_call.name:
+                    # Handle function calls based on tool_call
+                    if resp.tool_call and resp.tool_call.function_calls:
+                        for fc in resp.tool_call.function_calls:
+                            function_name = fc.name
+                            function_args = fc.args or {}
+                            function_id = fc.id  # Crucial for the response
+
+                            print(f"\nTool call detected: {function_name} with args {function_args}, ID: {function_id}")
+
+                            if function_name in functions_map:
+                                func_to_call = functions_map[function_name]
                                 try:
-                                    print(f"Executing function {func.__name__}...")
-                                    args = resp.function_call.args or {}
-                                    result = func(**args)
+                                    print(f"Executing function {function_name}...")
+                                    result = func_to_call(**function_args)
                                     print(f"Function result: {result}")
-                                    # Send the result back to Gemini
-                                    await self.session.send_realtime_input(
-                                        media=types.FunctionResponse(
-                                            name=resp.function_call.name,
-                                            response={"result": result}
-                                        )
+                                    
+                                    # Send the result back to Gemini using send_tool_response
+                                    tool_response_part = types.FunctionResponse(
+                                        id=function_id,
+                                        name=function_name,
+                                        response={"result": result}
                                     )
-                                    print("Function response sent back to Gemini")
+                                    await self.session.send_tool_response(
+                                        function_responses=[tool_response_part]
+                                    )
+                                    print("Tool response sent back to Gemini")
                                 except Exception as e:
-                                    print(f"Error executing function: {e}")
-                                    await self.session.send_realtime_input(
-                                        media=types.FunctionResponse(
-                                            name=resp.function_call.name,
-                                            response={"error": str(e)}
-                                        )
+                                    print(f"Error executing function {function_name}: {e}")
+                                    error_tool_response = types.FunctionResponse(
+                                        id=function_id,
+                                        name=function_name,
+                                        response={"error": str(e)}
                                     )
-                                break
-                    else:
-                        #do nothing
-                        #print("No function call in this response")
-                        pass
-                
+                                    await self.session.send_tool_response(
+                                        function_responses=[error_tool_response]
+                                    )
+                            else:
+                                print(f"Function {function_name} not found in available functions map.")
+                                # Optionally send an error response back to Gemini if function not found
+                                error_tool_response = types.FunctionResponse(
+                                    id=function_id,
+                                    name=function_name,
+                                    response={"error": f"Function {function_name} not implemented or available."}
+                                )
+                                await self.session.send_tool_response(
+                                    function_responses=[error_tool_response]
+                                )
+                    # else:
+                        # print("No tool call in this response part") # Debug if needed
+
                 # Show listening status when done speaking
                 print("Conversation turn completed, switching to listening mode")
                 self.anim.set_mode("idle")
