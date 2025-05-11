@@ -7,6 +7,8 @@ import queue
 import wave
 import audioop
 from dotenv import load_dotenv
+import smbus2 as smbus # Added for I2C communication
+import websockets # For exception handling during session close
 
 
 # Suppress ALSA and JACK warnings
@@ -39,33 +41,49 @@ RAW_CH = 6
 MODEL = "gemini-2.0-flash-live-001"
 
 # Example functions that can be called during conversation
-def get_time(**_):
-    """Get the current time."""
-    current_time = time.strftime("%H:%M:%S")
-    return f"The current time is {current_time}"
+# These will be moved into AudioHandler as methods
+# def get_time(**_):
+#     """Get the current time."""
+#     current_time = time.strftime("%H:%M:%S")
+#     return f"The current time is {current_time}"
 
-def get_date(**_):
-    """Get today's date."""
-    current_date = time.strftime("%Y-%m-%d")
-    return f"Today's date is {current_date}"
+# def get_date(**_):
+#     """Get today's date."""
+#     current_date = time.strftime("%Y-%m-%d")
+#     return f"Today's date is {current_date}"
 
-def set_display_brightness(brightness: float, **_):
-    """Set the display brightness.
+# def set_display_brightness(brightness: float, **_):
+#     """Set the display brightness.
     
-    Args:
-        brightness: A value between 0.0 and 1.0 for display brightness
-    """
-    if brightness < 0 or brightness > 1:
-        return "Brightness must be between 0 and 1"
-    return f"Display brightness set to {brightness*100}%"
+#     Args:
+#         brightness: A value between 0.0 and 1.0 for display brightness
+#     """
+#     if brightness < 0 or brightness > 1:
+#         return "Brightness must be between 0 and 1"
+#     return f"Display brightness set to {brightness*100}%"
 
-# List of available functions
-available_functions = [get_time, get_date, set_display_brightness]
+# def get_battery_level(**_):
+#     """Get the current battery level percentage."""
+#     ADDR = 0x2d  # I2C address of the UPS
+#     bus = None
+#     try:
+#         bus = smbus.SMBus(1)  # 0 for RPi 1, 1 for RPi 2,3,4
+#         data = bus.read_i2c_block_data(ADDR, 0x20, 6)
+#         battery_percent = int(data[4] | data[5] << 8)
+#         return f"The current battery level is {battery_percent}%"
+#     except FileNotFoundError:
+#         return "Error: I2C bus not found. Ensure I2C is enabled and the device is connected."
+#     except OSError as e:
+#         if e.errno == 121: # Remote I/O error (device not found at address)
+#             return f"Error: UPS device not found at address {hex(ADDR)}. Please check the connection."
+#         return f"Error reading battery level: {e}"
+#     except Exception as e:
+#         return f"An unexpected error occurred while reading battery level: {e}"
+#     finally:
+#         if bus:
+#             bus.close()
 
-# Create a dictionary to map function names to function objects
-functions_map = {func.__name__: func for func in available_functions}
-
-# Define tools for the LiveConnectConfig
+# Define tools for the LiveConnectConfig - these are static declarations
 tools_for_config = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
@@ -88,6 +106,16 @@ tools_for_config = [
                 },
                 required=['brightness']
             )
+        ),
+        types.FunctionDeclaration(
+            name="get_battery_level",
+            description="Get the current battery level percentage.",
+            parameters=types.Schema(type='OBJECT', properties={}) # No parameters
+        ),
+        types.FunctionDeclaration(
+            name="go_to_sleep",
+            description="Instructs the assistant to stop listening and return to wake word detection mode.",
+            parameters=types.Schema(type='OBJECT', properties={}) # No parameters
         )
     ])
 ]
@@ -114,9 +142,11 @@ CONFIG = types.LiveConnectConfig(
 class DisplayAnimator:
     """Plays animated GIFs on the 240×240 Waveshare screen."""
 
-    def __init__(self, disp, fps=15):
+    def __init__(self, disp, fps=15, stop_event=None):
+        print("[DisplayAnimator] Initialized.")
         self.disp = disp
         self.fps = fps
+        self.stop_event = stop_event
         self._frames = {"idle": [], "speak": []}  # Initialize before loading
         self._idx = 0
         
@@ -160,8 +190,13 @@ class DisplayAnimator:
                 print(f"[DisplayAnimator] Warning: Mode '{new_mode}' requested but no frames found. Staying in mode '{self.mode}'.")
 
     async def run(self):
+        print("[DisplayAnimator] Task started.")
         delay = 1 / self.fps
         while True:
+            if self.stop_event and self.stop_event.is_set():
+                print("[DisplayAnimator] Stop event received, exiting.")
+                break
+
             frames = self._frames[self.mode]
             if not frames:            # no frames yet
                 await asyncio.sleep(delay)
@@ -183,6 +218,8 @@ class AudioHandler:
         except RuntimeError:
             # called in main thread before loop exists; fixed later in run()
             self.loop = None
+
+        self.sleep_requested_event = asyncio.Event() # Event to signal sleep
 
         self.pya = pyaudio.PyAudio()
 
@@ -223,7 +260,95 @@ class AudioHandler:
         self.font = ImageFont.truetype("display_examples/LCD_Module_RPI_code/RaspberryPi/python/example/../Font/Font01.ttf", 24)
 
         # Initialize display animator   
-        self.anim = DisplayAnimator(self.disp)
+        self.anim = DisplayAnimator(self.disp, stop_event=self.sleep_requested_event)
+
+        # Initialize available functions and map them
+        self.available_functions = [
+            self.get_time, self.get_date, self.set_display_brightness,
+            self.get_battery_level, self.go_to_sleep
+        ]
+        self.functions_map = {func.__name__: func for func in self.available_functions}
+
+    # --- Tool Functions (now methods) ---
+    def get_time(self):
+        """Get the current time."""
+        current_time = time.strftime("%H:%M:%S")
+        return f"The current time is {current_time}"
+
+    def get_date(self):
+        """Get today's date."""
+        current_date = time.strftime("%Y-%m-%d")
+        return f"Today's date is {current_date}"
+
+    def set_display_brightness(self, brightness: float):
+        """Set the display brightness.
+        
+        Args:
+            brightness: A value between 0.0 and 1.0 for display brightness
+        """
+        if brightness < 0 or brightness > 1:
+            return "Brightness must be between 0 and 1"
+        # Access disp directly as it's an instance variable
+        self.disp.bl_DutyCycle(int(brightness * 100)) 
+        return f"Display brightness set to {brightness*100}%"
+
+    def get_battery_level(self):
+        """Get the current battery level percentage."""
+        ADDR = 0x2d  # I2C address of the UPS
+        bus = None
+        try:
+            bus = smbus.SMBus(1)  # 0 for RPi 1, 1 for RPi 2,3,4
+            data = bus.read_i2c_block_data(ADDR, 0x20, 6)
+            battery_percent = int(data[4] | data[5] << 8)
+            return f"The current battery level is {battery_percent}%"
+        except FileNotFoundError:
+            return "Error: I2C bus not found. Ensure I2C is enabled and the device is connected."
+        except OSError as e:
+            if e.errno == 121: # Remote I/O error (device not found at address)
+                return f"Error: UPS device not found at address {hex(ADDR)}. Please check the connection."
+            return f"Error reading battery level: {e}"
+        except Exception as e:
+            return f"An unexpected error occurred while reading battery level: {e}"
+        finally:
+            if bus:
+                bus.close()
+
+    async def go_to_sleep(self):
+        """Instructs the assistant to go to sleep and await wake word."""
+        print("[GoToSleep] Initiated.")
+        self.sleep_requested_event.set()
+        print("[GoToSleep] Sleep event SET.")
+        if self.session:
+            print("[GoToSleep] Session exists, attempting to close.")
+            try:
+                # Attempt to close the session gracefully.
+                # This might raise an error if already closing or closed.
+                await self.session.close()
+                print("[GoToSleep] Gemini session close COMMANDED.")
+            except websockets.exceptions.ConnectionClosedOK:
+                print("[GoToSleep] Gemini session already closed (OK).")
+            except websockets.exceptions.ConnectionClosedError as e:
+                print(f"[GoToSleep] Gemini session closed with error during explicit close: {e}")
+            except Exception as e:
+                print(f"[GoToSleep] Error during explicit session close: {e}")
+        else:
+            print("[GoToSleep] No active session to close.")
+        
+        # Signal other tasks to wind down if they are waiting on queues
+        # Use try_put_nowait to avoid blocking if queues are full (shouldn't happen often on shutdown)
+        try:
+            self.audio_out_q.put_nowait(None) 
+            print("[GoToSleep] Sentinel PUSHED to audio_out_q.")
+        except asyncio.QueueFull:
+            print("[GoToSleep] audio_out_q was full, sentinel not pushed.")
+        try:
+            self.audio_in_q.put_nowait(None)
+            print("[GoToSleep] Sentinel PUSHED to audio_in_q.")
+        except asyncio.QueueFull:
+            print("[GoToSleep] audio_in_q was full, sentinel not pushed.")
+            
+        print("[GoToSleep] Method finished.")
+        return "Going to sleep. Say 'Salut Karl' to wake me up."
 
     def _strip_to_processed(self, data: bytes) -> bytes:
         frame = RAW_CH * 2              # 12 bytes per frame
@@ -327,25 +452,52 @@ class AudioHandler:
 
     # ────────────────────────── coroutines ──────────────────────────────────
     async def _send_to_gemini(self):
+        print("[Sender] Task started.")
         print("Send‑loop started…")
         while True:
-            data = await self.audio_out_q.get()
+            if self.sleep_requested_event.is_set():
+                print("[Sender] Sleep event detected, exiting send-loop.")
+                break
+            try:
+                # Wait for data with a timeout to allow checking the sleep event
+                data = await asyncio.wait_for(self.audio_out_q.get(), timeout=0.1)
+                if data is None: # Sentinel value for shutdown
+                    print("[Sender] Received sentinel, exiting send-loop.")
+                    self.audio_out_q.task_done()
+                    break
+            except asyncio.TimeoutError:
+                continue # No data, loop back to check sleep_requested_event
+            except Exception as e:
+                print(f"[Sender] Error getting data from queue: {e}")
+                break
 
-            data = self._strip_to_processed(data)       # ① use the AEC track only
-            # down-mix 4-ch → mono before resample
-            #if IN_CH != 1:
-            #    data = audioop.tomono(data, 2, 0.25, 0.25)          # average L+R
-            #    data = audioop.tomono(data, 2, 1, 0)                # collapse again
-            if self.input_rate != SEND_SAMPLE_RATE:
-                data, self.rs_in_state = audioop.ratecv(
-                    data, 2, OUT_CH,
-                    self.input_rate, SEND_SAMPLE_RATE,
-                    self.rs_in_state)
-            if self.session:
-                blob = types.Blob(data=data, mime_type=f"audio/pcm;rate={SEND_SAMPLE_RATE}")
-                await self.session.send_realtime_input(media=blob)
-            self.sent_wf.writeframes(data)
-            self.audio_out_q.task_done()
+            try:
+                data = self._strip_to_processed(data)       # ① use the AEC track only
+                if self.input_rate != SEND_SAMPLE_RATE:
+                    data, self.rs_in_state = audioop.ratecv(
+                        data, 2, OUT_CH,
+                        self.input_rate, SEND_SAMPLE_RATE,
+                        self.rs_in_state)
+                if self.session: # Rely on send_realtime_input to fail if session is closed
+                    blob = types.Blob(data=data, mime_type=f"audio/pcm;rate={SEND_SAMPLE_RATE}")
+                    await self.session.send_realtime_input(media=blob)
+                else:
+                    print("[Sender] Session not active, not sending.")
+                    # If the session is gone, we might as well stop trying to send.
+                    # Consider setting sleep_requested_event here or just breaking.
+                    # For now, let's rely on go_to_sleep to set the event.
+                    # break 
+                self.sent_wf.writeframes(data)
+            except websockets.exceptions.ConnectionClosedError as e:
+                print(f"[Sender] Connection closed while sending: {e}. Exiting send-loop.")
+                break
+            except Exception as e:
+                print(f"[Sender] Error processing or sending audio: {e}")
+                # Depending on the error, you might want to break or continue
+            finally:
+                if 'data' in locals() and data is not None: # Ensure data was fetched and not sentinel
+                    self.audio_out_q.task_done()
+        print("Send-loop finished.")
 
     # Add helper to show status on display
     def _show_status(self, text):
@@ -363,30 +515,43 @@ class AudioHandler:
         self.disp.ShowImage(im_r)
 
     async def _recv_from_gemini(self):
+        print("[Receiver] Task started.")
         print("Receive‑loop started…")
 
         is_speaking = False                # ← persists
         
         while True:
-            if not self.session:
-                print("No active session, waiting...")
-                await asyncio.sleep(0.05)
+            if self.sleep_requested_event.is_set():
+                print("[Receiver] Sleep event detected, exiting receive-loop.")
+                break
+
+            if not self.session: # Rely on session.receive() to fail if session is closed
+                print("[Receiver] No active session, waiting briefly or exiting...")
+                if self.sleep_requested_event.is_set(): # Double check if sleep was requested during this gap
+                    break
+                await asyncio.sleep(0.1) # Brief pause before checking session again or sleep event
                 continue
             
             try:
                 print("Waiting for turn...")
-                turn = self.session.receive()
-                print("Got turn")
+                # Use a timeout for receive to allow checking sleep_requested_event
+                # However, session.receive() is a generator, making direct timeout tricky.
+                # The primary exit from this loop when sleeping will be the ConnectionClosedError
+                # when self.session.close() is called in go_to_sleep.
 
-                speaking_shown = False
-                async for resp in turn:
+                turn_iterator = self.session.receive()
+                async for resp in turn_iterator:
+                    if self.sleep_requested_event.is_set():
+                        print("[Receiver] Sleep event detected mid-turn, breaking from turn processing.")
+                        break # Exit from processing messages in the current turn
+
                     #print(f"Processing response: {resp}")
                     
-                    if resp.data and not speaking_shown:
+                    if resp.data and not is_speaking:
                         print("Starting to speak...")
                         self.anim.set_mode("speak")
                         print("Speaking...")
-                        speaking_shown = True
+                        is_speaking = True
                     
                     if resp.data:
                         #print("Writing audio data...")
@@ -406,70 +571,142 @@ class AudioHandler:
 
                             print(f"\nTool call detected: {function_name} with args {function_args}, ID: {function_id}")
 
-                            if function_name in functions_map:
-                                func_to_call = functions_map[function_name]
+                            if function_name in self.functions_map:
+                                func_to_call = self.functions_map[function_name]
                                 try:
                                     print(f"Executing function {function_name}...")
-                                    result = func_to_call(**function_args)
+                                    # If it's an async function (like go_to_sleep), await it
+                                    if asyncio.iscoroutinefunction(func_to_call):
+                                        result = await func_to_call(**function_args)
+                                    else:
+                                        result = func_to_call(**function_args)
                                     print(f"Function result: {result}")
                                     
-                                    # Send the result back to Gemini using send_tool_response
-                                    tool_response_part = types.FunctionResponse(
-                                        id=function_id,
-                                        name=function_name,
-                                        response={"result": result}
-                                    )
-                                    await self.session.send_tool_response(
-                                        function_responses=[tool_response_part]
-                                    )
-                                    print("Tool response sent back to Gemini")
+                                    # For go_to_sleep, the session will be closing, so don't attempt to send a response.
+                                    if function_name == "go_to_sleep":
+                                        print("Skipping tool response for go_to_sleep as session is closing.")
+                                    else:
+                                        # Send the result back to Gemini using send_tool_response
+                                        tool_response_part = types.FunctionResponse(
+                                            id=function_id,
+                                            name=function_name,
+                                            response={"result": result}
+                                        )
+                                        await self.session.send_tool_response(
+                                            function_responses=[tool_response_part]
+                                        )
+                                        print("Tool response sent back to Gemini")
                                 except Exception as e:
                                     print(f"Error executing function {function_name}: {e}")
-                                    error_tool_response = types.FunctionResponse(
-                                        id=function_id,
-                                        name=function_name,
-                                        response={"error": str(e)}
-                                    )
-                                    await self.session.send_tool_response(
-                                        function_responses=[error_tool_response]
-                                    )
+                                    # If it's go_to_sleep that failed, session might still be open or in weird state
+                                    # but generally, we still try to send an error if not go_to_sleep, 
+                                    # or if session is still connectable.
+                                    if function_name != "go_to_sleep" and self.session:
+                                        try:
+                                            error_tool_response = types.FunctionResponse(
+                                                id=function_id,
+                                                name=function_name,
+                                                response={"error": str(e)}
+                                            )
+                                            await self.session.send_tool_response(
+                                                function_responses=[error_tool_response]
+                                            )
+                                        except Exception as e_send:
+                                            print(f"Failed to send error response for {function_name}: {e_send}")
                             else:
                                 print(f"Function {function_name} not found in available functions map.")
-                                # Optionally send an error response back to Gemini if function not found
-                                error_tool_response = types.FunctionResponse(
-                                    id=function_id,
-                                    name=function_name,
-                                    response={"error": f"Function {function_name} not implemented or available."}
-                                )
-                                await self.session.send_tool_response(
-                                    function_responses=[error_tool_response]
-                                )
+                                # Send error response back to Gemini if function not found
+                                if self.session:
+                                    try:
+                                        error_tool_response = types.FunctionResponse(
+                                            id=function_id,
+                                            name=function_name,
+                                            response={"error": f"Function {function_name} not implemented or available."}
+                                        )
+                                        await self.session.send_tool_response(
+                                            function_responses=[error_tool_response]
+                                        )
+                                    except Exception as e:
+                                        print(f"Failed to send error response for {function_name}: {e}")
+                    #else:
+                    #            print(f"Function {function_name} not found in available functions map.")
+                    #            # Send error response back to Gemini if function not found
+                    #            error_tool_response = types.FunctionResponse(
+                    #                id=function_id,
+                    #                name=function_name,
+                    #                response={"error": f"Function {function_name} not implemented or available."}
+                    #            )
+                    #            await self.session.send_tool_response(
+                    #                function_responses=[error_tool_response]
+                    #            )
                     # else:
                         # print("No tool call in this response part") # Debug if needed
-
+                
                 # Show listening status when done speaking
                 print("Conversation turn completed, switching to listening mode")
                 self.anim.set_mode("idle")
                 print("Listening...")
                 
+            except websockets.exceptions.ConnectionClosedOK:
+                print("[Receiver] Connection closed (OK). Exiting receive-loop.")
+                break
+            except websockets.exceptions.ConnectionClosedError as e:
+                print(f"[Receiver] Connection closed with error: {e}. Exiting receive-loop.")
+                break
+            except asyncio.TimeoutError:
+                # This might occur if we implement a timeout around receive(), but it's complex with async iterators
+                print("[Receiver] Timeout waiting for response, checking sleep event.")
+                continue
             except Exception as e:
                 print(f"Error in _recv_from_gemini: {e}")
                 traceback.print_exc()
-                # Don't break the loop on error, just continue
+                if self.sleep_requested_event.is_set(): # If an error occurs, and sleep is requested, exit.
+                    print("[Receiver] Exiting due to error and sleep request.")
+                    break
+                # Don't break the loop on other errors unless sleep is also set, just continue
+                await asyncio.sleep(0.1) # Small delay before retrying or continuing
                 continue
+        print("Receive-loop finished.")
 
     async def _playback(self):
+        print("[Playback] Task started.")
         print("Playback‑loop started…")
         while True:
-            pcm = await self.audio_in_q.get()
-            if self.output_rate != RECEIVE_SAMPLE_RATE:
-                pcm, self.rs_out_state = audioop.ratecv(
-                    pcm, 2, OUT_CH,
-                    RECEIVE_SAMPLE_RATE, self.output_rate,
-                    self.rs_out_state)
-            # self.output_stream.write(pcm) # Blocking call
-            await self.loop.run_in_executor(None, self.output_stream.write, pcm) # Non-blocking
-            self.audio_in_q.task_done()
+            if self.sleep_requested_event.is_set():
+                print("[Playback] Sleep event detected, exiting playback-loop.")
+                break
+            try:
+                # Wait for PCM data with a timeout
+                pcm = await asyncio.wait_for(self.audio_in_q.get(), timeout=0.1)
+                if pcm is None: # Sentinel value for shutdown
+                    print("[Playback] Received sentinel, exiting playback-loop.")
+                    self.audio_in_q.task_done()
+                    break
+            except asyncio.TimeoutError:
+                continue # No data, loop back to check sleep_requested_event
+            except Exception as e:
+                print(f"[Playback] Error getting data from queue: {e}")
+                break
+
+            try:
+                if self.output_rate != RECEIVE_SAMPLE_RATE:
+                    pcm_converted, self.rs_out_state = audioop.ratecv(
+                        pcm, 2, OUT_CH,
+                        RECEIVE_SAMPLE_RATE, self.output_rate,
+                        self.rs_out_state)
+                else:
+                    pcm_converted = pcm
+                
+                if self.output_stream and self.output_stream.is_active():
+                    await self.loop.run_in_executor(None, self.output_stream.write, pcm_converted)
+                else:
+                    print("[Playback] Output stream not active, not playing audio.")
+            except Exception as e:
+                print(f"[Playback] Error processing or playing audio: {e}")
+            finally:
+                if 'pcm' in locals() and pcm is not None: # Ensure pcm was fetched and not sentinel
+                    self.audio_in_q.task_done()
+        print("Playback-loop finished.")
 
     # ────────────────────────── cleanup ─────────────────────────────────────
     def _cleanup(self):
@@ -497,6 +734,8 @@ class AudioHandler:
             # print("Set GOOGLE_API_KEY first.")
             return
 
+        self.sleep_requested_event.clear() # Clear event at the start of a new run
+
         # set loop reference (if not set in __init__)
         if self.loop is None:
             self.loop = asyncio.get_running_loop()
@@ -510,12 +749,24 @@ class AudioHandler:
             self.session = sess
             # print("Connected – start talking!")
             # Show listening status upon connection
-            self._show_status("Listening...")
+            self.anim.set_mode("idle") # Set initial animation to idle
+            print("Listening...")
+
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(self.anim.run())         
-                tg.create_task(self._send_to_gemini())
-                tg.create_task(self._recv_from_gemini())
-                tg.create_task(self._playback())
+                print("[Run] Creating tasks...")
+                send_task = tg.create_task(self._send_to_gemini())
+                recv_task = tg.create_task(self._recv_from_gemini())
+                playback_task = tg.create_task(self._playback())
+                anim_task = tg.create_task(self.anim.run()) # Animator task
+                print("[Run] All tasks created.")
+
+            # This part will be reached when all tasks in the group are done.
+            # This should happen when sleep_requested_event is set and tasks exit.
+            print("[Run] TaskGroup finished.")
+
+        # Clear session after use, so go_to_sleep doesn't try to close an already ended session
+        self.session = None 
+        print("AudioHandler run method completed.")
 
     # ────────────────────────── static helper ───────────────────────────────
 

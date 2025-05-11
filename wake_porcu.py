@@ -92,6 +92,7 @@ def main():
 
     try:
         while True:
+            print(f"DEBUG: Porcupine loop. Stream active: {stream.is_active() if stream else 'No stream'}, p: {p}")
             raw = stream.read(CHUNK, exception_on_overflow=False)
             beam = extract_beam(raw)
 
@@ -123,6 +124,7 @@ def main():
                     keyword_paths=KEYWORD_PATHS,
                     model_path=MODEL_PATH)
                 p, stream, dev_index = open_pyaudio()
+                logging.info(f"DEBUG: Re-opened PyAudio. Stream active: {stream.is_active() if stream else 'No stream'}")
                 wf = wave.open(OUT_WAV, "wb")
                 wf.setnchannels(1)
                 wf.setsampwidth(p.get_sample_size(FORMAT))
