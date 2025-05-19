@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 import smbus2 as smbus # Added for I2C communication
 import websockets # For exception handling during session close
 
+import base64, cv2
+from picamera2 import Picamera2
+
 
 # Suppress ALSA and JACK warnings
 sys.stderr = open(os.devnull, 'w')
@@ -26,6 +29,10 @@ import spidev as SPI
 sys.path.append("display_examples/LCD_Module_RPI_code/RaspberryPi/python/example/..")
 from lib import LCD_1inch28
 from PIL import Image, ImageDraw, ImageFont, ImageSequence
+
+# Add path for servo control
+sys.path.append("freenove_examples")
+from servo import Servo
 
 # ─── Audio constants ──────────────────────────────────────────────────────────
 FORMAT = pyaudio.paInt16
@@ -116,6 +123,24 @@ tools_for_config = [
             name="go_to_sleep",
             description="Instructs the assistant to stop listening and return to wake word detection mode.",
             parameters=types.Schema(type='OBJECT', properties={}) # No parameters
+        ),
+        types.FunctionDeclaration(
+            name="move_camera",
+            description="Moves the camera by panning (left/right) or tilting (up/down) relative to its current position.\nWhen the user asks to look at a specific object, person, or in a general direction (e.g., 'look at the red box', 'look at me', 'look a bit to the left'), you should first analyze the most recent image from the camera.\nBased on your visual analysis, estimate the `pan_relative_angle` and `tilt_relative_angle` needed to center the subject or achieve the desired view.\nThe camera starts at pan 90° (center) and tilt 90° (center).\nPan (servo 0) physical limits: 13° (far left) to 154° (far right).\nTilt (servo 1) physical limits: 36° (max up) to 85° (max down from base, noting 90° is center).\nPositive `pan_relative_angle` moves right, negative moves left.\nPositive `tilt_relative_angle` moves up, negative moves down.",
+            parameters=types.Schema(
+                type='OBJECT',
+                properties={
+                    'pan_relative_angle': types.Schema(
+                        type='NUMBER',
+                        description="Degrees to pan. Positive values pan right, negative values pan left. E.g., 10 pans right by 10 degrees, -5 pans left by 5 degrees."
+                    ),
+                    'tilt_relative_angle': types.Schema(
+                        type='NUMBER',
+                        description="Degrees to tilt. Positive values tilt up, negative values tilt down. E.g., 10 tilts up by 10 degrees, -5 tilts down by 5 degrees."
+                    )
+                },
+                # No required parameters, as user might want to pan OR tilt, or neither (just get status if we add that later)
+            )
         )
     ])
 ]
@@ -132,21 +157,36 @@ CONFIG = types.LiveConnectConfig(
     system_instruction=types.Content(
         parts=[
             types.Part(
-                text="You are Karl, a sarcastic and very funny robot. You are very smart and helpful for the people interacting with you."
+                text="You are Karl, a sarcastic and very funny robot. You are very smart and helpful for the people interacting with you. You can see through your camera, and always try to center the camera at the face of the person you are talking to."
             )
         ]
     ),
     tools=tools_for_config  # Use the new tools configuration
 )
 
+
+""" CONFIG = {
+    "response_modalities": ["AUDIO"],      # keep audio replies
+    "speech_config": {                     # same voice as before
+        "language_code": "en-US",
+        "voice_config": {
+            "prebuilt_voice_config": {"voice_name": "Zephyr"}
+        },
+    },
+    # NEW – ask the server to transcribe both directions
+    "input_audio_transcription": {},       # user → text
+    "output_audio_transcription": {},      # Gemini audio → text
+} """
+
 class DisplayAnimator:
     """Plays animated GIFs on the 240×240 Waveshare screen."""
 
-    def __init__(self, disp, fps=15, stop_event=None):
+    def __init__(self, disp, fps=15, stop_event=None, frame_skip_ratio=2):
         print("[DisplayAnimator] Initialized.")
         self.disp = disp
         self.fps = fps
         self.stop_event = stop_event
+        self.frame_skip_ratio = frame_skip_ratio
         self._frames = {"idle": [], "speak": []}  # Initialize before loading
         self._idx = 0
         
@@ -162,15 +202,12 @@ class DisplayAnimator:
         try:
             with Image.open(gif_path) as gif:
                 self._frames[mode] = []
-                for frame in ImageSequence.Iterator(gif):
-                    # Convert frame to RGB if needed
-                    current_frame = frame
-                    if current_frame.mode != 'RGB':
-                        current_frame = current_frame.convert('RGB')
-                    # Rotate frame 180 degrees
-                    current_frame = current_frame.rotate(180)
-                    self._frames[mode].append(current_frame)
-                # print(f"[DisplayAnimator] Loaded {len(self._frames[mode])} frames for mode '{mode}'. Path: {gif_path}")
+                frame_iterator = ImageSequence.Iterator(gif)
+                for i, frame in enumerate(frame_iterator):
+                    if i % self.frame_skip_ratio == 0:
+                        img = frame.convert('RGB').copy()   # copy = new buffer
+                        self._frames[mode].append(img)
+                # print(f"[DisplayAnimator] Loaded {len(self._frames[mode])} frames for mode '{mode}' (skipped {self.frame_skip_ratio -1} out of {self.frame_skip_ratio} frames). Path: {gif_path}")
         except Exception as e:
             print(f"[DisplayAnimator] Error loading GIF {gif_path}: {e}")
             # Create a blank frame as fallback
@@ -253,7 +290,14 @@ class AudioHandler:
         self.session = None
 
         # Initialize display for status feedback
-        self.disp = LCD_1inch28.LCD_1inch28()
+        spi1 = SPI.SpiDev()
+        spi1.open(1, 0)               # bus 1, CE0  → /dev/spidev1.0
+        spi1.max_speed_hz = 40_000_000
+        self.disp = LCD_1inch28.LCD_1inch28(
+                spi = spi1,    # use SPI-1
+                rst = 12,      # GPIO12  (pin 32)
+                dc  = 26,      # GPIO26  (pin 37)
+                bl  = 13)      # GPIO13  (pin 33, PWM back-light)
         self.disp.Init()
         self.disp.clear()
         self.disp.bl_DutyCycle(50)
@@ -262,10 +306,25 @@ class AudioHandler:
         # Initialize display animator   
         self.anim = DisplayAnimator(self.disp, stop_event=self.sleep_requested_event)
 
+        # Initialize Servo for camera pan/tilt
+        try:
+            self.servo = Servo()
+            self.current_pan_angle = 90
+            self.current_tilt_angle = 90
+            self.servo.set_servo_pwm('0', self.current_pan_angle) # Pan servo
+            self.servo.set_servo_pwm('1', self.current_tilt_angle) # Tilt servo
+            print("[AudioHandler] Servos initialized to 90/90 degrees.")
+        except Exception as e:
+            self.servo = None
+            print(f"[AudioHandler] Error initializing servos: {e}. Camera movement will be disabled.")
+            # Fallback: set angles so subsequent logic doesn't error if servo is None
+            self.current_pan_angle = 90
+            self.current_tilt_angle = 90
+
         # Initialize available functions and map them
         self.available_functions = [
             self.get_time, self.get_date, self.set_display_brightness,
-            self.get_battery_level, self.go_to_sleep
+            self.get_battery_level, self.go_to_sleep, self.move_camera
         ]
         self.functions_map = {func.__name__: func for func in self.available_functions}
 
@@ -349,6 +408,51 @@ class AudioHandler:
             
         print("[GoToSleep] Method finished.")
         return "Going to sleep. Say 'Salut Karl' to wake me up."
+
+    def move_camera(self, pan_relative_angle: float = 0.0, tilt_relative_angle: float = 0.0):
+        """Pans or tilts the camera by a specified number of degrees relative to the current position.
+
+        Args:
+            pan_relative_angle (float): Degrees to pan. Positive pans right, negative pans left.
+            tilt_relative_angle (float): Degrees to tilt. Positive tilts up, negative tilts down.
+        """
+        if not self.servo:
+            return "Camera control is disabled due to an initialization error."
+
+        # Define limits
+        PAN_MIN = 13  # Left
+        PAN_MAX = 154 # Right
+        TILT_MIN = 36 # Up
+        TILT_MAX = 85 # Down (Note: 90 is base, so lower numbers are more "up")
+
+        pan_changed = False
+        tilt_changed = False
+
+        # Calculate and clamp pan angle
+        if pan_relative_angle != 0.0:
+            new_pan_angle = self.current_pan_angle + pan_relative_angle
+            clamped_pan_angle = max(PAN_MIN, min(PAN_MAX, new_pan_angle))
+            if clamped_pan_angle != self.current_pan_angle:
+                self.current_pan_angle = clamped_pan_angle
+                self.servo.set_servo_pwm('0', int(self.current_pan_angle))
+                pan_changed = True
+            print(f"[MoveCamera] Pan: current={self.current_pan_angle}, requested_rel={pan_relative_angle}, new_abs_target={new_pan_angle}, clamped={clamped_pan_angle}")
+
+        # Calculate and clamp tilt angle
+        # Positive tilt_relative_angle means "up", which corresponds to a *decrease* in servo angle value
+        if tilt_relative_angle != 0.0:
+            new_tilt_angle = self.current_tilt_angle - tilt_relative_angle # Subtract because lower angle = up
+            clamped_tilt_angle = max(TILT_MIN, min(TILT_MAX, new_tilt_angle))
+            if clamped_tilt_angle != self.current_tilt_angle:
+                self.current_tilt_angle = clamped_tilt_angle
+                self.servo.set_servo_pwm('1', int(self.current_tilt_angle))
+                tilt_changed = True
+            print(f"[MoveCamera] Tilt: current={self.current_tilt_angle}, requested_rel={tilt_relative_angle}, new_abs_target={new_tilt_angle}, clamped={clamped_tilt_angle}")
+
+        if not pan_changed and not tilt_changed:
+            return f"Camera already at target position or no change requested. Current Pan: {self.current_pan_angle:.0f}°, Tilt: {self.current_tilt_angle:.0f}°"
+
+        return f"Camera moved. Pan: {self.current_pan_angle:.0f}°, Tilt: {self.current_tilt_angle:.0f}°"
 
     def _strip_to_processed(self, data: bytes) -> bytes:
         frame = RAW_CH * 2              # 12 bytes per frame
@@ -450,6 +554,34 @@ class AudioHandler:
 
         self.input_stream.start_stream()
 
+    def _capture_jpeg(self) -> bytes:
+        cam = Picamera2()
+        cam.configure(cam.create_still_configuration(
+            main={"size": (640, 480), "format": "RGB888"}
+        ))
+        cam.start()
+        time.sleep(0.25)           # quick AE settle
+        rgb = cam.capture_array()
+        cam.close()
+        return cv2.imencode(".jpg", rgb)[1].tobytes()
+    
+    async def _vision_feed(self, interval=10):
+        """Send a fresh camera frame every *interval* seconds."""
+        while not self.sleep_requested_event.is_set():
+            if self.session:                        # only if live
+                jpeg_bytes = self._capture_jpeg()
+                blob = types.Blob(
+                    data=jpeg_bytes,
+                    mime_type="image/jpeg"
+                )
+                try:
+                    await self.session.send_realtime_input(media=blob)
+                    # optional log
+                    print("[Vision] frame sent")
+                except Exception as e:
+                    print(f"[Vision] send failed: {e}")
+            await asyncio.sleep(interval)
+
     # ────────────────────────── coroutines ──────────────────────────────────
     async def _send_to_gemini(self):
         print("[Sender] Task started.")
@@ -511,8 +643,8 @@ class AudioHandler:
         x = (self.disp.width - w) // 2
         y = (self.disp.height - h) // 2
         draw.text((x, y), text, fill="WHITE", font=self.font)
-        im_r = image.rotate(180)
-        self.disp.ShowImage(im_r)
+        # No need to rotate since screen is physically upside down
+        self.disp.ShowImage(image)
 
     async def _recv_from_gemini(self):
         print("[Receiver] Task started.")
@@ -541,6 +673,13 @@ class AudioHandler:
 
                 turn_iterator = self.session.receive()
                 async for resp in turn_iterator:
+
+                    """ if getattr(resp, "input_audio_transcription", None):
+                        print("YOU  >", resp.input_audio_transcription.text)
+
+                    if getattr(resp, "output_audio_transcription", None):
+                         print("KARL >", resp.output_audio_transcription.text) """
+
                     if self.sleep_requested_event.is_set():
                         print("[Receiver] Sleep event detected mid-turn, breaking from turn processing.")
                         break # Exit from processing messages in the current turn
@@ -758,6 +897,7 @@ class AudioHandler:
                 recv_task = tg.create_task(self._recv_from_gemini())
                 playback_task = tg.create_task(self._playback())
                 anim_task = tg.create_task(self.anim.run()) # Animator task
+                tg.create_task(self._vision_feed(interval=10))   # <── new line
                 print("[Run] All tasks created.")
 
             # This part will be reached when all tasks in the group are done.
