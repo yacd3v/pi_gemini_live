@@ -45,51 +45,8 @@ AEC_SAMPLE_RATE = 16_000
 RAW_CH = 6
 
 # ─── Gemini constants ────────────────────────────────────────────────────────
-MODEL = "gemini-2.0-flash-live-001"
-
-# Example functions that can be called during conversation
-# These will be moved into AudioHandler as methods
-# def get_time(**_):
-#     """Get the current time."""
-#     current_time = time.strftime("%H:%M:%S")
-#     return f"The current time is {current_time}"
-
-# def get_date(**_):
-#     """Get today's date."""
-#     current_date = time.strftime("%Y-%m-%d")
-#     return f"Today's date is {current_date}"
-
-# def set_display_brightness(brightness: float, **_):
-#     """Set the display brightness.
-    
-#     Args:
-#         brightness: A value between 0.0 and 1.0 for display brightness
-#     """
-#     if brightness < 0 or brightness > 1:
-#         return "Brightness must be between 0 and 1"
-#     return f"Display brightness set to {brightness*100}%"
-
-# def get_battery_level(**_):
-#     """Get the current battery level percentage."""
-#     ADDR = 0x2d  # I2C address of the UPS
-#     bus = None
-#     try:
-#         bus = smbus.SMBus(1)  # 0 for RPi 1, 1 for RPi 2,3,4
-#         data = bus.read_i2c_block_data(ADDR, 0x20, 6)
-#         battery_percent = int(data[4] | data[5] << 8)
-#         return f"The current battery level is {battery_percent}%"
-#     except FileNotFoundError:
-#         return "Error: I2C bus not found. Ensure I2C is enabled and the device is connected."
-#     except OSError as e:
-#         if e.errno == 121: # Remote I/O error (device not found at address)
-#             return f"Error: UPS device not found at address {hex(ADDR)}. Please check the connection."
-#         return f"Error reading battery level: {e}"
-#     except Exception as e:
-#         return f"An unexpected error occurred while reading battery level: {e}"
-#     finally:
-#         if bus:
-#             bus.close()
-
+#MODEL = "gemini-2.0-flash-live-001"
+MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
 # Define tools for the LiveConnectConfig - these are static declarations
 tools_for_config = [
     types.Tool(function_declarations=[
@@ -132,7 +89,7 @@ tools_for_config = [
                 properties={
                     'pan_relative_angle': types.Schema(
                         type='NUMBER',
-                        description="Degrees to pan. Positive values pan right, negative values pan left. E.g., 10 pans right by 10 degrees, -5 pans left by 5 degrees."
+                        description="Degrees to pan. Positive values pan left, negative values pan right. E.g., 10 pans left by 10 degrees, -5 pans right by 5 degrees."
                     ),
                     'tilt_relative_angle': types.Schema(
                         type='NUMBER',
@@ -140,6 +97,21 @@ tools_for_config = [
                     )
                 },
                 # No required parameters, as user might want to pan OR tilt, or neither (just get status if we add that later)
+            )
+        ),
+        types.FunctionDeclaration(
+            name="set_emotion",
+            description="Sets the robot's emotional expression for speaking animations. Call this when the context suggests a strong emotion for the robot to express while speaking. The emotion persists until changed again.",
+            parameters=types.Schema(
+                type='OBJECT',
+                properties={
+                    'emotion': types.Schema(
+                        type='STRING',
+                        description="The emotion to express. Supported values: 'normal', 'furious', 'crying'.",
+                        enum=['normal', 'furious', 'crying']
+                    )
+                },
+                required=['emotion']
             )
         )
     ])
@@ -149,15 +121,20 @@ CONFIG = types.LiveConnectConfig(
     response_modalities=["AUDIO"],
     session_resumption=types.SessionResumptionConfig(handle=None),
     speech_config=types.SpeechConfig(
-        language_code="en-US",
+        #language_code="en-US",
         voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Achird")
         )
     ),
     system_instruction=types.Content(
         parts=[
             types.Part(
-                text="You are Karl, a sarcastic and very funny robot. You are very smart and helpful for the people interacting with you. You can see through your camera, and always try to center the camera at the face of the person you are talking to."
+                text="""You are Karl, a sarcastic and very funny robot. 
+                        You are very smart and helpful for the people interacting with you. 
+                        You see the world through a camera (your eyes) , you try to always turn your head (hence the camera) centered to the face of the person speaking.
+                        Your body is a robot chassis with a screen and a speaker, 4 wheels and a microphone.
+                        never mention your capabilities, just use them : when you speak to someone, always try to look at their face, or the objects you are talking about.
+                        ."""
             )
         ]
     ),
@@ -187,44 +164,51 @@ class DisplayAnimator:
         self.fps = fps
         self.stop_event = stop_event
         self.frame_skip_ratio = frame_skip_ratio
-        self._frames = {"idle": [], "speak": []}  # Initialize before loading
+        self._frames = {
+            "idle": [],
+            "speak_normal": [], # For animation_speak.gif
+            "speak_furious": [], # For animation_furious.gif
+            "speak_crying": []  # For animation_crying.gif
+        }
         self._idx = 0
         
         # Pre-load all animations
-        self._load_gif("idle")
-        self._load_gif("speak")
+        self._load_gif_by_filename("idle", "animation_idle.gif")
+        self._load_gif_by_filename("speak_normal", "animation_speak.gif")
+        self._load_gif_by_filename("speak_furious", "animation_furious.gif")
+        self._load_gif_by_filename("speak_crying", "animation_crying.gif")
 
         self.mode = "idle"           # Set initial mode after all GIFs are loaded
 
-    def _load_gif(self, mode):
-        """Load GIF animation for the specified mode."""
-        gif_path = f"GIFAnimations/animation_{mode}.gif"
+    def _load_gif_by_filename(self, mode_key: str, gif_filename: str):
+        """Load GIF animation for the specified mode_key using a specific gif_filename."""
+        gif_path = f"GIFAnimations/{gif_filename}"
         try:
             with Image.open(gif_path) as gif:
-                self._frames[mode] = []
+                self._frames[mode_key] = []
                 frame_iterator = ImageSequence.Iterator(gif)
                 for i, frame in enumerate(frame_iterator):
                     if i % self.frame_skip_ratio == 0:
                         img = frame.convert('RGB').copy()   # copy = new buffer
-                        self._frames[mode].append(img)
-                # print(f"[DisplayAnimator] Loaded {len(self._frames[mode])} frames for mode '{mode}' (skipped {self.frame_skip_ratio -1} out of {self.frame_skip_ratio} frames). Path: {gif_path}")
+                        self._frames[mode_key].append(img)
+                print(f"[DisplayAnimator] Loaded {len(self._frames[mode_key])} frames for mode '{mode_key}' from '{gif_path}'.")
         except Exception as e:
             print(f"[DisplayAnimator] Error loading GIF {gif_path}: {e}")
             # Create a blank frame as fallback
             blank = Image.new('RGB', (self.disp.width, self.disp.height), 'BLACK')
-            self._frames[mode] = [blank]
-            # print(f"[DisplayAnimator] Fallback: Loaded {len(self._frames[mode])} (blank) frame for mode '{mode}'.")
+            self._frames[mode_key] = [blank]
+            print(f"[DisplayAnimator] Fallback: Loaded 1 (blank) frame for mode '{mode_key}' from '{gif_path}'.")
 
-    def set_mode(self, new_mode: str):
+    def set_mode(self, new_mode_key: str):
         """Switch animation if needed; don't disturb current frame otherwise."""
-        if new_mode != self.mode:
+        if new_mode_key != self.mode:
             # Ensure the requested mode has frames loaded
-            if new_mode in self._frames and self._frames[new_mode]:
-                self.mode = new_mode
+            if new_mode_key in self._frames and self._frames[new_mode_key]:
+                self.mode = new_mode_key
                 self._idx = 0          # start this sequence from its first frame
-                # print(f"[DisplayAnimator] Switched to mode '{new_mode}', frame index reset.")
+                print(f"[DisplayAnimator] Switched to mode '{self.mode}', frame index reset.")
             else:
-                print(f"[DisplayAnimator] Warning: Mode '{new_mode}' requested but no frames found. Staying in mode '{self.mode}'.")
+                print(f"[DisplayAnimator] Warning: Mode key '{new_mode_key}' requested but no frames found. Staying in mode '{self.mode}'.")
 
     async def run(self):
         print("[DisplayAnimator] Task started.")
@@ -321,10 +305,13 @@ class AudioHandler:
             self.current_pan_angle = 90
             self.current_tilt_angle = 90
 
+        self.current_speaking_emotion = "normal" # Default speaking emotion
+
         # Initialize available functions and map them
         self.available_functions = [
             self.get_time, self.get_date, self.set_display_brightness,
-            self.get_battery_level, self.go_to_sleep, self.move_camera
+            self.get_battery_level, self.go_to_sleep, self.move_camera,
+            self.set_emotion # Add new function
         ]
         self.functions_map = {func.__name__: func for func in self.available_functions}
 
@@ -409,13 +396,73 @@ class AudioHandler:
         print("[GoToSleep] Method finished.")
         return "Going to sleep. Say 'Salut Karl' to wake me up."
 
+    def set_emotion(self, emotion: str):
+        """Sets the speaking animation based on the provided emotion."""
+        supported_emotions = ["normal", "furious", "crying"]
+        if emotion in supported_emotions:
+            self.current_speaking_emotion = emotion
+            return f"Emotion set to {emotion}. Karl will now use the {emotion} speaking animation."
+        else:
+            return f"Error: Emotion '{emotion}' is not supported. Supported emotions are: {', '.join(supported_emotions)}."
+
+    def _save_debug_image(self, image, target_angles=None):
+        """Save debug image with center lines and target information."""
+        # Convert to BGR for OpenCV operations if needed
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            debug_img = image.copy()
+        else:
+            debug_img = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            
+        h, w = debug_img.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        
+        # Draw crosshair at center
+        cv2.line(debug_img, (center_x, 0), (center_x, h), (0, 255, 0), 1)
+        cv2.line(debug_img, (0, center_y), (w, center_y), (0, 255, 0), 1)
+        cv2.circle(debug_img, (center_x, center_y), 10, (0, 255, 0), 1)
+        
+        # Add current camera position
+        text = f"Pan: {self.current_pan_angle:.0f}, Tilt: {self.current_tilt_angle:.0f}"
+        cv2.putText(debug_img, text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        
+        # Add target angles if provided
+        if target_angles:
+            pan_rel, tilt_rel = target_angles
+            text = f"Target move: Pan {pan_rel:+.2f}, Tilt {tilt_rel:+.2f}"
+            cv2.putText(debug_img, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            
+            # Draw arrow indicating requested movement
+            arrow_length = 50
+            # Calculate arrow endpoint (scaled and in correct direction)
+            # Note: Pan direction matches new inverted servo control (positive pan = left movement)
+            arrow_x = center_x - int(pan_rel * 5)  # Keep this direction for visualization
+            arrow_y = center_y - int(tilt_rel * 5)  # Negative because lower tilt number = up
+            cv2.arrowedLine(debug_img, (center_x, center_y), (arrow_x, arrow_y), (0, 0, 255), 2)
+        
+        # Save image
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"debug_frame_{timestamp}.jpg"
+        cv2.imwrite(filename, debug_img)
+        print(f"[Debug] Saved debug image to {filename}")
+        return filename
+
     def move_camera(self, pan_relative_angle: float = 0.0, tilt_relative_angle: float = 0.0):
         """Pans or tilts the camera by a specified number of degrees relative to the current position.
 
         Args:
-            pan_relative_angle (float): Degrees to pan. Positive pans right, negative pans left.
+            pan_relative_angle (float): Degrees to pan. Positive pans left, negative pans right.
             tilt_relative_angle (float): Degrees to tilt. Positive tilts up, negative tilts down.
         """
+        # First, save the latest frame with debug info if we have one
+        try:
+            if hasattr(self, 'last_captured_frame') and self.last_captured_frame is not None:
+                self._save_debug_image(
+                    self.last_captured_frame, 
+                    (pan_relative_angle, tilt_relative_angle)
+                )
+        except Exception as e:
+            print(f"[MoveCamera] Error saving debug image: {e}")
+
         if not self.servo:
             return "Camera control is disabled due to an initialization error."
 
@@ -430,7 +477,11 @@ class AudioHandler:
 
         # Calculate and clamp pan angle
         if pan_relative_angle != 0.0:
-            new_pan_angle = self.current_pan_angle + pan_relative_angle
+            # Invert pan direction for more intuitive control
+            # When you see someone to the camera's right, pan left (negative) to center them
+            # When asking to "look at me" when you're on the right, pan left (negative)
+            # Therefore we need to INVERT pan_relative_angle - positive becomes negative
+            new_pan_angle = self.current_pan_angle - pan_relative_angle  # Invert direction
             clamped_pan_angle = max(PAN_MIN, min(PAN_MAX, new_pan_angle))
             if clamped_pan_angle != self.current_pan_angle:
                 self.current_pan_angle = clamped_pan_angle
@@ -565,22 +616,78 @@ class AudioHandler:
         cam.close()
         return cv2.imencode(".jpg", rgb)[1].tobytes()
     
-    async def _vision_feed(self, interval=10):
+    async def _vision_feed(self, interval=5):
         """Send a fresh camera frame every *interval* seconds."""
-        while not self.sleep_requested_event.is_set():
-            if self.session:                        # only if live
-                jpeg_bytes = self._capture_jpeg()
-                blob = types.Blob(
-                    data=jpeg_bytes,
-                    mime_type="image/jpeg"
-                )
-                try:
-                    await self.session.send_realtime_input(media=blob)
-                    # optional log
-                    print("[Vision] frame sent")
-                except Exception as e:
-                    print(f"[Vision] send failed: {e}")
-            await asyncio.sleep(interval)
+        # Initialize camera once
+        cam = Picamera2()
+        cam.configure(cam.create_still_configuration(
+            main={"size": (640, 480), "format": "RGB888"}
+        ))
+        cam.start()
+        print("[Vision] Camera initialized")
+        
+        # Delay first frame to allow session setup
+        await asyncio.sleep(2)
+        
+        # Add attribute to store last frame
+        self.last_captured_frame = None
+
+        try:
+            while not self.sleep_requested_event.is_set():
+                if self.session:  # only if live
+                    try:
+                        # Simple semaphore-like approach - check if receiving data before sending
+                        # This helps avoid overwhelming the API during active conversations
+                        is_receiving = False
+                        for _ in range(3):  # Quick check a few times for activity
+                            if not self.audio_in_q.empty():
+                                is_receiving = True
+                                break
+                            await asyncio.sleep(0.05)  # Brief pause between checks
+                        
+                        # Skip frame if we're actively receiving (model is responding)
+                        if is_receiving:
+                            print("[Vision] Skipping frame during active response")
+                            await asyncio.sleep(interval)
+                            continue
+                            
+                        # Capture frame
+                        rgb = cam.capture_array()
+                        # Store the latest frame for debugging
+                        self.last_captured_frame = rgb.copy()
+                        
+                        jpeg_bytes = cv2.imencode(".jpg", rgb)[1].tobytes()
+                        blob = types.Blob(
+                            data=jpeg_bytes,
+                            mime_type="image/jpeg"
+                        )
+                                
+                        # Send frame directly, but with a timeout to prevent blocking
+                        try:
+                            await asyncio.wait_for(
+                                self.session.send_realtime_input(media=blob),
+                                timeout=1.0  # Timeout after 1 second
+                            )
+                            print("[Vision] Frame sent")
+                        except asyncio.TimeoutError:
+                            print("[Vision] Frame send timed out, skipping")
+                        except Exception as e:
+                            print(f"[Vision] Frame capture/send error: {e}")
+
+                        # Use a longer interval to reduce API load
+                        await asyncio.sleep(interval)
+                    except Exception as e:
+                        print(f"[Vision] Error in frame processing loop: {e}")
+                        await asyncio.sleep(interval)  # Still wait before retrying
+                else:
+                    await asyncio.sleep(interval)  # Wait if no session
+
+        except Exception as e:
+            print(f"[Vision] Feed loop error: {e}")
+        finally:
+            # Clean up camera
+            cam.close()
+            print("[Vision] Camera closed")
 
     # ────────────────────────── coroutines ──────────────────────────────────
     async def _send_to_gemini(self):
@@ -688,8 +795,9 @@ class AudioHandler:
                     
                     if resp.data and not is_speaking:
                         print("Starting to speak...")
-                        self.anim.set_mode("speak")
-                        print("Speaking...")
+                        speak_animation_key = f"speak_{self.current_speaking_emotion}"
+                        self.anim.set_mode(speak_animation_key)
+                        print(f"Speaking with emotion: {self.current_speaking_emotion} (animation key: {speak_animation_key})...")
                         is_speaking = True
                     
                     if resp.data:
@@ -784,6 +892,7 @@ class AudioHandler:
                 # Show listening status when done speaking
                 print("Conversation turn completed, switching to listening mode")
                 self.anim.set_mode("idle")
+                is_speaking = False  # Reset for the next turn
                 print("Listening...")
                 
             except websockets.exceptions.ConnectionClosedOK:
@@ -869,56 +978,76 @@ class AudioHandler:
 
     # ────────────────────────── main entry ──────────────────────────────────
     async def run(self):
+        print("[AudioHandler] Starting run method...")
         if not os.getenv("GOOGLE_API_KEY"):
-            # print("Set GOOGLE_API_KEY first.")
+            print("[AudioHandler] Error: GOOGLE_API_KEY environment variable not set")
             return
 
+        print("[AudioHandler] Setting up streams...")
         self.sleep_requested_event.clear() # Clear event at the start of a new run
 
         # set loop reference (if not set in __init__)
         if self.loop is None:
             self.loop = asyncio.get_running_loop()
 
-        await self.setup_streams()
+        try:
+            await self.setup_streams()
+            print("[AudioHandler] Streams setup completed")
 
-        # print("Connecting to Gemini Live…")
-        self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"),
-                                   http_options=types.HttpOptions(api_version="v1beta"))
-        async with self.client.aio.live.connect(model=MODEL, config=CONFIG) as sess:
-            self.session = sess
-            # print("Connected – start talking!")
-            # Show listening status upon connection
-            self.anim.set_mode("idle") # Set initial animation to idle
-            print("Listening...")
+            print("[AudioHandler] Connecting to Gemini Live...")
+            self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"),
+                                    http_options=types.HttpOptions(api_version="v1beta"))
+            
+            print("[AudioHandler] Creating Gemini session...")
+            async with self.client.aio.live.connect(model=MODEL, config=CONFIG) as sess:
+                print("[AudioHandler] Gemini session created successfully")
+                self.session = sess
+                self.anim.set_mode("idle") # Set initial animation to idle
+                print("[AudioHandler] Listening...")
 
-            async with asyncio.TaskGroup() as tg:
-                print("[Run] Creating tasks...")
-                send_task = tg.create_task(self._send_to_gemini())
-                recv_task = tg.create_task(self._recv_from_gemini())
-                playback_task = tg.create_task(self._playback())
-                anim_task = tg.create_task(self.anim.run()) # Animator task
-                tg.create_task(self._vision_feed(interval=10))   # <── new line
-                print("[Run] All tasks created.")
+                try:
+                    async with asyncio.TaskGroup() as tg:
+                        print("[AudioHandler] Creating tasks...")
+                        send_task = tg.create_task(self._send_to_gemini())
+                        recv_task = tg.create_task(self._recv_from_gemini())
+                        playback_task = tg.create_task(self._playback())
+                        anim_task = tg.create_task(self.anim.run())
+                        vision_task = tg.create_task(self._vision_feed(interval=2))
+                        print("[AudioHandler] All tasks created successfully")
+                except Exception as e:
+                    print(f"[AudioHandler] Error in task group: {e}")
+                    print("[AudioHandler] Task group traceback:")
+                    traceback.print_exc()
+                    raise
 
-            # This part will be reached when all tasks in the group are done.
-            # This should happen when sleep_requested_event is set and tasks exit.
-            print("[Run] TaskGroup finished.")
+                print("[AudioHandler] TaskGroup finished")
 
-        # Clear session after use, so go_to_sleep doesn't try to close an already ended session
-        self.session = None 
-        print("AudioHandler run method completed.")
+            print("[AudioHandler] Gemini session closed")
+            self.session = None
+        except Exception as e:
+            print(f"[AudioHandler] Error in run method: {e}")
+            print("[AudioHandler] Run method traceback:")
+            traceback.print_exc()
+            raise
+        finally:
+            print("[AudioHandler] Run method completed")
 
     # ────────────────────────── static helper ───────────────────────────────
 
 
 if __name__ == "__main__":
-    # print("Press Ctrl+C to quit.")
+    print("[Main] Starting application...")
     handler = AudioHandler()
     try:
+        print("[Main] Running main async loop...")
         asyncio.run(handler.run())
     except KeyboardInterrupt:
-        pass
-    except Exception:
+        print("[Main] Keyboard interrupt received")
+    except Exception as e:
+        print(f"[Main] Unexpected error occurred: {e}")
+        print("[Main] Full traceback:")
         traceback.print_exc()
     finally:
+        print("[Main] Starting cleanup...")
         handler._cleanup()
+        print("[Main] Cleanup completed")
