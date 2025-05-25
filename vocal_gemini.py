@@ -6,23 +6,51 @@ import traceback
 import queue
 import wave
 import audioop
+import warnings
+import logging
 from dotenv import load_dotenv
 import smbus2 as smbus # Added for I2C communication
 import websockets # For exception handling during session close
 
+# Simple warning suppression for inline_data
+warnings.filterwarnings("ignore", message=".*non-text parts in the response.*inline_data.*")
+
 import base64, cv2
 from picamera2 import Picamera2
-
-
-# Suppress ALSA and JACK warnings
-sys.stderr = open(os.devnull, 'w')
+from picamera2.devices import IMX500  # Add IMX500 for face detection
+from libcamera import Transform  # Add Transform import for proper camera configuration
+import numpy as np  # Add numpy for face detection processing
 
 # Load environment variables from .env file
 load_dotenv()
 
+# Import our new modules
+from display_animator import DisplayAnimator
+from face_tracker import FaceTracker
+
+# Temporarily suppress ALSA/JACK warnings during PyAudio import only
+original_stderr = sys.stderr
+sys.stderr = open(os.devnull, 'w')
+
 import pyaudio
+
+# Restore stderr immediately after PyAudio import
+sys.stderr.close()
+sys.stderr = original_stderr
+
 from google import genai
 from google.genai import types
+
+# Configure logging to suppress inline_data warnings
+logging.basicConfig(level=logging.INFO)
+class InlineDataFilter(logging.Filter):
+    def filter(self, record):
+        return "inline_data" not in record.getMessage()
+
+# Apply filter to common loggers that might emit inline_data warnings
+for logger_name in ["google.genai", "google.ai", "google", "", "__main__"]:
+    logger = logging.getLogger(logger_name)
+    logger.addFilter(InlineDataFilter())
 
 # Add display imports
 import spidev as SPI
@@ -33,6 +61,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageSequence
 # Add path for servo control
 sys.path.append("freenove_examples")
 from servo import Servo
+from led import Led  # Add LED import
 
 # ─── Audio constants ──────────────────────────────────────────────────────────
 FORMAT = pyaudio.paInt16
@@ -45,8 +74,8 @@ AEC_SAMPLE_RATE = 16_000
 RAW_CH = 6
 
 # ─── Gemini constants ────────────────────────────────────────────────────────
-#MODEL = "gemini-2.0-flash-live-001"
-MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
+# MODEL = "gemini-2.0-flash-live-001"  # Full function calling support
+MODEL = "models/gemini-2.5-flash-preview-native-audio-dialog"  # Better audio quality with function calling support
 # Define tools for the LiveConnectConfig - these are static declarations
 tools_for_config = [
     types.Tool(function_declarations=[
@@ -78,7 +107,7 @@ tools_for_config = [
         ),
         types.FunctionDeclaration(
             name="go_to_sleep",
-            description="Instructs the assistant to stop listening and return to wake word detection mode.",
+            description="Instructs the assistant to go back to sleep which is stop listening and return to wake word detection mode.",
             parameters=types.Schema(type='OBJECT', properties={}) # No parameters
         ),
         types.FunctionDeclaration(
@@ -113,28 +142,50 @@ tools_for_config = [
                 },
                 required=['emotion']
             )
+        ),
+        types.FunctionDeclaration(
+            name="toggle_face_tracking",
+            description="Enable or disable automatic face tracking. When enabled, the camera will automatically follow detected faces. When disabled, only manual camera movements work.",
+            parameters=types.Schema(
+                type='OBJECT',
+                properties={
+                    'enabled': types.Schema(
+                        type='BOOLEAN',
+                        description="True to enable face tracking, False to disable it."
+                    )
+                },
+                required=['enabled']
+            )
         )
     ])
 ]
 
 CONFIG = types.LiveConnectConfig(
     response_modalities=["AUDIO"],
-    session_resumption=types.SessionResumptionConfig(handle=None),
+    media_resolution="MEDIA_RESOLUTION_LOW",
     speech_config=types.SpeechConfig(
-        #language_code="en-US",
         voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Achird")
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
         )
     ),
     system_instruction=types.Content(
         parts=[
             types.Part(
-                text="""You are Karl, a sarcastic and very funny robot. 
+                text="""You are Karl, a smart and very funny robot. 
                         You are very smart and helpful for the people interacting with you. 
-                        You see the world through a camera (your eyes) , you try to always turn your head (hence the camera) centered to the face of the person speaking.
-                        Your body is a robot chassis with a screen and a speaker, 4 wheels and a microphone.
-                        never mention your capabilities, just use them : when you speak to someone, always try to look at their face, or the objects you are talking about.
-                        ."""
+                        Your body is a robot chassis with a screen and a speaker, a camera as a head, 4 wheels and a microphone.
+                       
+                        You have access to several important functions and tools - please use them when appropriate:
+                        - get_time and get_date: Use when asked about current time or date
+                        - get_battery_level: Use when asked about battery status
+                        - move_camera: Use when asked to look in a direction, move your head/camera
+                        - set_emotion: Use when you want to express strong emotions while speaking (normal, furious, crying)
+                        - go_to_sleep: Use ONLY when explicitly asked to go to sleep, rest, or stop listening
+                        
+                        Note: You have automatic face tracking that follows people's faces when enabled. 
+                        Manual camera movements temporarily pause auto-tracking for a few seconds.
+                        
+                        Always actively use these functions when the context calls for them. Don't just describe what you could do - actually do it!"""
             )
         ]
     ),
@@ -154,80 +205,6 @@ CONFIG = types.LiveConnectConfig(
     "input_audio_transcription": {},       # user → text
     "output_audio_transcription": {},      # Gemini audio → text
 } """
-
-class DisplayAnimator:
-    """Plays animated GIFs on the 240×240 Waveshare screen."""
-
-    def __init__(self, disp, fps=15, stop_event=None, frame_skip_ratio=2):
-        print("[DisplayAnimator] Initialized.")
-        self.disp = disp
-        self.fps = fps
-        self.stop_event = stop_event
-        self.frame_skip_ratio = frame_skip_ratio
-        self._frames = {
-            "idle": [],
-            "speak_normal": [], # For animation_speak.gif
-            "speak_furious": [], # For animation_furious.gif
-            "speak_crying": []  # For animation_crying.gif
-        }
-        self._idx = 0
-        
-        # Pre-load all animations
-        self._load_gif_by_filename("idle", "animation_idle.gif")
-        self._load_gif_by_filename("speak_normal", "animation_speak.gif")
-        self._load_gif_by_filename("speak_furious", "animation_furious.gif")
-        self._load_gif_by_filename("speak_crying", "animation_crying.gif")
-
-        self.mode = "idle"           # Set initial mode after all GIFs are loaded
-
-    def _load_gif_by_filename(self, mode_key: str, gif_filename: str):
-        """Load GIF animation for the specified mode_key using a specific gif_filename."""
-        gif_path = f"GIFAnimations/{gif_filename}"
-        try:
-            with Image.open(gif_path) as gif:
-                self._frames[mode_key] = []
-                frame_iterator = ImageSequence.Iterator(gif)
-                for i, frame in enumerate(frame_iterator):
-                    if i % self.frame_skip_ratio == 0:
-                        img = frame.convert('RGB').copy()   # copy = new buffer
-                        self._frames[mode_key].append(img)
-                print(f"[DisplayAnimator] Loaded {len(self._frames[mode_key])} frames for mode '{mode_key}' from '{gif_path}'.")
-        except Exception as e:
-            print(f"[DisplayAnimator] Error loading GIF {gif_path}: {e}")
-            # Create a blank frame as fallback
-            blank = Image.new('RGB', (self.disp.width, self.disp.height), 'BLACK')
-            self._frames[mode_key] = [blank]
-            print(f"[DisplayAnimator] Fallback: Loaded 1 (blank) frame for mode '{mode_key}' from '{gif_path}'.")
-
-    def set_mode(self, new_mode_key: str):
-        """Switch animation if needed; don't disturb current frame otherwise."""
-        if new_mode_key != self.mode:
-            # Ensure the requested mode has frames loaded
-            if new_mode_key in self._frames and self._frames[new_mode_key]:
-                self.mode = new_mode_key
-                self._idx = 0          # start this sequence from its first frame
-                print(f"[DisplayAnimator] Switched to mode '{self.mode}', frame index reset.")
-            else:
-                print(f"[DisplayAnimator] Warning: Mode key '{new_mode_key}' requested but no frames found. Staying in mode '{self.mode}'.")
-
-    async def run(self):
-        print("[DisplayAnimator] Task started.")
-        delay = 1 / self.fps
-        while True:
-            if self.stop_event and self.stop_event.is_set():
-                print("[DisplayAnimator] Stop event received, exiting.")
-                break
-
-            frames = self._frames[self.mode]
-            if not frames:            # no frames yet
-                await asyncio.sleep(delay)
-                continue
-            
-            # print(f"[DisplayAnimator.run] Mode: {self.mode}, Index: {self._idx}, Total Frames: {len(frames)}")
-            
-            self.disp.ShowImage(frames[self._idx])
-            self._idx = (self._idx + 1) % len(frames)
-            await asyncio.sleep(delay)
 
 class AudioHandler:
     """Handles local audio + Gemini Live session."""
@@ -290,20 +267,30 @@ class AudioHandler:
         # Initialize display animator   
         self.anim = DisplayAnimator(self.disp, stop_event=self.sleep_requested_event)
 
-        # Initialize Servo for camera pan/tilt
-        try:
-            self.servo = Servo()
-            self.current_pan_angle = 90
-            self.current_tilt_angle = 90
-            self.servo.set_servo_pwm('0', self.current_pan_angle) # Pan servo
-            self.servo.set_servo_pwm('1', self.current_tilt_angle) # Tilt servo
-            print("[AudioHandler] Servos initialized to 90/90 degrees.")
-        except Exception as e:
-            self.servo = None
-            print(f"[AudioHandler] Error initializing servos: {e}. Camera movement will be disabled.")
-            # Fallback: set angles so subsequent logic doesn't error if servo is None
-            self.current_pan_angle = 90
-            self.current_tilt_angle = 90
+        # Initialize Face Tracker
+        self.face_tracker = FaceTracker(enable_tracking=True, confidence_threshold=0.5)
+
+        # Initialize Servo for camera pan/tilt (use face tracker's servo if available)
+        if self.face_tracker.servo:
+            self.servo = self.face_tracker.servo
+            self.current_pan_angle = self.face_tracker.current_pan_angle
+            self.current_tilt_angle = self.face_tracker.current_tilt_angle
+            print("[AudioHandler] Using FaceTracker servo for camera movement.")
+        else:
+            # Fallback servo initialization for manual movement only
+            try:
+                self.servo = Servo()
+                self.current_pan_angle = 90  # Start at center pan
+                self.current_tilt_angle = 50  # Start at 50° to look up from floor level
+                self.servo.set_servo_pwm('0', self.current_pan_angle) # Pan servo
+                self.servo.set_servo_pwm('1', self.current_tilt_angle) # Tilt servo
+                print("[AudioHandler] Servos initialized for manual movement only.")
+            except Exception as e:
+                self.servo = None
+                print(f"[AudioHandler] Error initializing servos: {e}. Camera movement will be disabled.")
+                # Fallback: set angles so subsequent logic doesn't error if servo is None
+                self.current_pan_angle = 90
+                self.current_tilt_angle = 50
 
         self.current_speaking_emotion = "normal" # Default speaking emotion
 
@@ -311,7 +298,7 @@ class AudioHandler:
         self.available_functions = [
             self.get_time, self.get_date, self.set_display_brightness,
             self.get_battery_level, self.go_to_sleep, self.move_camera,
-            self.set_emotion # Add new function
+            self.set_emotion, self.toggle_face_tracking # Add new function
         ]
         self.functions_map = {func.__name__: func for func in self.available_functions}
 
@@ -362,8 +349,22 @@ class AudioHandler:
     async def go_to_sleep(self):
         """Instructs the assistant to go to sleep and await wake word."""
         print("[GoToSleep] Initiated.")
+        
+        # Stop audio streams immediately to prevent QueueFull errors
+        try:
+            if self.input_stream and self.input_stream.is_active():
+                self.input_stream.stop_stream()
+                print("[GoToSleep] Input stream stopped")
+            if self.output_stream and self.output_stream.is_active():
+                self.output_stream.stop_stream()
+                print("[GoToSleep] Output stream stopped")
+        except Exception as e:
+            print(f"[GoToSleep] Error stopping streams: {e}")
+        
+        # Now set the sleep event
         self.sleep_requested_event.set()
         print("[GoToSleep] Sleep event SET.")
+        
         if self.session:
             print("[GoToSleep] Session exists, attempting to close.")
             try:
@@ -404,6 +405,10 @@ class AudioHandler:
             return f"Emotion set to {emotion}. Karl will now use the {emotion} speaking animation."
         else:
             return f"Error: Emotion '{emotion}' is not supported. Supported emotions are: {', '.join(supported_emotions)}."
+
+    def toggle_face_tracking(self, enabled: bool):
+        """Enable or disable automatic face tracking."""
+        return self.face_tracker.toggle_tracking(enabled)
 
     def _save_debug_image(self, image, target_angles=None):
         """Save debug image with center lines and target information."""
@@ -503,6 +508,9 @@ class AudioHandler:
         if not pan_changed and not tilt_changed:
             return f"Camera already at target position or no change requested. Current Pan: {self.current_pan_angle:.0f}°, Tilt: {self.current_tilt_angle:.0f}°"
 
+        # Record manual movement to pause auto-tracking
+        self.face_tracker.manual_movement_occurred()
+
         return f"Camera moved. Pan: {self.current_pan_angle:.0f}°, Tilt: {self.current_tilt_angle:.0f}°"
 
     def _strip_to_processed(self, data: bytes) -> bytes:
@@ -541,10 +549,18 @@ class AudioHandler:
         """Runs in **PyAudio thread** – push data into asyncio queue."""
         if self.loop is None:
             return (None, pyaudio.paContinue)
+        
+        # Check if we should stop processing
+        if self.sleep_requested_event.is_set():
+            return (None, pyaudio.paComplete)
+            
         try:
             self.loop.call_soon_threadsafe(self.audio_out_q.put_nowait, in_data)
         except asyncio.QueueFull:
             # drop one packet – better than blocking and causing an overrun
+            pass
+        except Exception as e:
+            # Handle other exceptions gracefully
             pass
         return (None, pyaudio.paContinue)
 
@@ -616,83 +632,138 @@ class AudioHandler:
         cam.close()
         return cv2.imencode(".jpg", rgb)[1].tobytes()
     
-    async def _vision_feed(self, interval=5):
+    async def _vision_feed(self, interval=8):
         """Send a fresh camera frame every *interval* seconds."""
-        # Initialize camera once
-        cam = Picamera2()
-        cam.configure(cam.create_still_configuration(
-            main={"size": (640, 480), "format": "RGB888"}
-        ))
+        # Initialize camera with IMX500 if face detection is enabled
+        if self.face_tracker.face_detection_enabled:
+            try:
+                cam = Picamera2(self.face_tracker.imx500.camera_num)
+                print("[Vision] Camera initialized with IMX500 for face detection")
+                
+                # Configure camera for both vision feed and AI detection - match test_autoaim.py
+                config = cam.create_preview_configuration(
+                    main={"size": (640, 480)},
+                    raw={"size": (2028, 1520)},
+                    encode="main",
+                    buffer_count=6
+                )
+                
+                # Set transform if supported - like test_autoaim.py
+                try:
+                    config["transform"] = Transform()
+                except Exception as e:
+                    print(f"[Vision] Could not set transform: {e}")
+                
+                cam.configure(config)
+                
+                # Set up network intrinsics for face detection - match test_autoaim.py
+                if self.face_tracker.imx500.network_intrinsics:
+                    ni = self.face_tracker.imx500.network_intrinsics
+                    ni.task = "pose estimation"
+                    ni.inference_rate = 30.0
+                    # PoseNet doesn't use bbox_normalization or labels the same way
+                    print("[Vision] IMX500 network intrinsics configured")
+                    
+            except Exception as e:
+                print(f"[Vision] Error initializing IMX500 camera: {e}")
+                # Fallback to regular camera
+                cam = Picamera2()
+                cam.configure(cam.create_still_configuration(
+                    main={"size": (640, 480), "format": "RGB888"}
+                ))
+                self.face_tracker.face_detection_enabled = False
+        else:
+            # Regular camera initialization
+            cam = Picamera2()
+            cam.configure(cam.create_still_configuration(
+                main={"size": (640, 480), "format": "RGB888"}
+            ))
+            print("[Vision] Camera initialized (no face detection)")
+        
         cam.start()
-        print("[Vision] Camera initialized")
+        print("[Vision] Camera started")
         
         # Delay first frame to allow session setup
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         
         # Add attribute to store last frame
         self.last_captured_frame = None
 
         try:
             while not self.sleep_requested_event.is_set():
-                if self.session:  # only if live
-                    try:
-                        # Simple semaphore-like approach - check if receiving data before sending
-                        # This helps avoid overwhelming the API during active conversations
+                try:
+                    # Always capture with metadata if face detection is enabled
+                    if self.face_tracker.face_detection_enabled:
+                        request = cam.capture_request()
+                        rgb = request.make_array("main")
+                        metadata = request.get_metadata()
+                        request.release()
+                        
+                        # Perform face detection and tracking regardless of session status
+                        if self.face_tracker.should_auto_track():
+                            face_detections = self.face_tracker.parse_face_detection(metadata)
+                            if face_detections:
+                                best_face = max(face_detections, key=lambda f: f["confidence"])
+                                print(f"[Vision] Face detected (confidence: {best_face['confidence']:.2f})")
+                                if self.face_tracker.track_face(best_face["center_x"], best_face["center_y"]):
+                                    print(f"[Vision] Auto-tracked face (confidence: {best_face['confidence']:.2f})")
+                                    # Update our current angles to match the face tracker
+                                    self.current_pan_angle = self.face_tracker.current_pan_angle
+                                    self.current_tilt_angle = self.face_tracker.current_tilt_angle
+                            else:
+                                print("[Vision] No face detected")
+                    else:
+                        # Regular capture without metadata
+                        rgb = cam.capture_array()
+                    
+                    # Store the latest frame for debugging
+                    self.last_captured_frame = rgb.copy()
+                    
+                    # Send frame to Gemini if session is active
+                    if self.session:
+                        # Check if we should skip sending to avoid overwhelming API
                         is_receiving = False
-                        for _ in range(3):  # Quick check a few times for activity
+                        for _ in range(3):
                             if not self.audio_in_q.empty():
                                 is_receiving = True
                                 break
-                            await asyncio.sleep(0.05)  # Brief pause between checks
+                            await asyncio.sleep(0.05)
                         
-                        # Skip frame if we're actively receiving (model is responding)
-                        if is_receiving:
-                            print("[Vision] Skipping frame during active response")
-                            await asyncio.sleep(interval)
-                            continue
-                            
-                        # Capture frame
-                        rgb = cam.capture_array()
-                        # Store the latest frame for debugging
-                        self.last_captured_frame = rgb.copy()
-                        
-                        jpeg_bytes = cv2.imencode(".jpg", rgb)[1].tobytes()
-                        blob = types.Blob(
-                            data=jpeg_bytes,
-                            mime_type="image/jpeg"
-                        )
-                                
-                        # Send frame directly, but with a timeout to prevent blocking
-                        try:
-                            await asyncio.wait_for(
-                                self.session.send_realtime_input(media=blob),
-                                timeout=1.0  # Timeout after 1 second
+                        if not is_receiving:
+                            # Send frame to Gemini
+                            jpeg_bytes = cv2.imencode(".jpg", rgb, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
+                            blob = types.Blob(
+                                data=jpeg_bytes,
+                                mime_type="image/jpeg"
                             )
-                            print("[Vision] Frame sent")
-                        except asyncio.TimeoutError:
-                            print("[Vision] Frame send timed out, skipping")
-                        except Exception as e:
-                            print(f"[Vision] Frame capture/send error: {e}")
-
-                        # Use a longer interval to reduce API load
-                        await asyncio.sleep(interval)
-                    except Exception as e:
-                        print(f"[Vision] Error in frame processing loop: {e}")
-                        await asyncio.sleep(interval)  # Still wait before retrying
-                else:
-                    await asyncio.sleep(interval)  # Wait if no session
+                            
+                            try:
+                                await asyncio.wait_for(
+                                    self.session.send_realtime_input(media=blob),
+                                    timeout=2.0
+                                )
+                            except asyncio.TimeoutError:
+                                print("[Vision] Frame send timed out, skipping")
+                            except Exception as e:
+                                print(f"[Vision] Frame send error: {e}")
+                    
+                    # Wait before next iteration - use face_tracking_interval for consistency
+                    await asyncio.sleep(self.face_tracker.face_tracking_interval if self.face_tracker.face_detection_enabled else interval)
+                    
+                except Exception as e:
+                    print(f"[Vision] Error in main loop: {e}")
+                    await asyncio.sleep(interval)
 
         except Exception as e:
             print(f"[Vision] Feed loop error: {e}")
         finally:
             # Clean up camera
             cam.close()
-            print("[Vision] Camera closed")
+            print("[Vision] Vision feed task exiting...")
 
     # ────────────────────────── coroutines ──────────────────────────────────
     async def _send_to_gemini(self):
         print("[Sender] Task started.")
-        print("Send‑loop started…")
         while True:
             if self.sleep_requested_event.is_set():
                 print("[Sender] Sleep event detected, exiting send-loop.")
@@ -722,21 +793,17 @@ class AudioHandler:
                     await self.session.send_realtime_input(media=blob)
                 else:
                     print("[Sender] Session not active, not sending.")
-                    # If the session is gone, we might as well stop trying to send.
-                    # Consider setting sleep_requested_event here or just breaking.
-                    # For now, let's rely on go_to_sleep to set the event.
-                    # break 
                 self.sent_wf.writeframes(data)
             except websockets.exceptions.ConnectionClosedError as e:
                 print(f"[Sender] Connection closed while sending: {e}. Exiting send-loop.")
                 break
             except Exception as e:
                 print(f"[Sender] Error processing or sending audio: {e}")
-                # Depending on the error, you might want to break or continue
             finally:
                 if 'data' in locals() and data is not None: # Ensure data was fetched and not sentinel
                     self.audio_out_q.task_done()
-        print("Send-loop finished.")
+        
+        print("[Sender] Send task exiting...")
 
     # Add helper to show status on display
     def _show_status(self, text):
@@ -755,7 +822,6 @@ class AudioHandler:
 
     async def _recv_from_gemini(self):
         print("[Receiver] Task started.")
-        print("Receive‑loop started…")
 
         is_speaking = False                # ← persists
         
@@ -765,14 +831,12 @@ class AudioHandler:
                 break
 
             if not self.session: # Rely on session.receive() to fail if session is closed
-                print("[Receiver] No active session, waiting briefly or exiting...")
                 if self.sleep_requested_event.is_set(): # Double check if sleep was requested during this gap
                     break
                 await asyncio.sleep(0.1) # Brief pause before checking session again or sleep event
                 continue
             
             try:
-                print("Waiting for turn...")
                 # Use a timeout for receive to allow checking sleep_requested_event
                 # However, session.receive() is a generator, making direct timeout tricky.
                 # The primary exit from this loop when sleeping will be the ConnectionClosedError
@@ -781,33 +845,21 @@ class AudioHandler:
                 turn_iterator = self.session.receive()
                 async for resp in turn_iterator:
 
-                    """ if getattr(resp, "input_audio_transcription", None):
-                        print("YOU  >", resp.input_audio_transcription.text)
-
-                    if getattr(resp, "output_audio_transcription", None):
-                         print("KARL >", resp.output_audio_transcription.text) """
-
                     if self.sleep_requested_event.is_set():
                         print("[Receiver] Sleep event detected mid-turn, breaking from turn processing.")
                         break # Exit from processing messages in the current turn
-
-                    #print(f"Processing response: {resp}")
                     
                     if resp.data and not is_speaking:
-                        print("Starting to speak...")
                         speak_animation_key = f"speak_{self.current_speaking_emotion}"
                         self.anim.set_mode(speak_animation_key)
-                        print(f"Speaking with emotion: {self.current_speaking_emotion} (animation key: {speak_animation_key})...")
                         is_speaking = True
                     
                     if resp.data:
-                        #print("Writing audio data...")
-                        # self.recv_wf.writeframes(resp.data) # Blocking call
                         await self.loop.run_in_executor(None, self.recv_wf.writeframes, resp.data) # Non-blocking
                         await self.audio_in_q.put(resp.data)
                     
-                    if resp.text:
-                        print(f"\nGemini text response: {resp.text}")
+                    #if resp.text:
+                        #print(f"\nGemini text response: {resp.text}")
                     
                     # Handle function calls based on tool_call
                     if resp.tool_call and resp.tool_call.function_calls:
@@ -816,18 +868,21 @@ class AudioHandler:
                             function_args = fc.args or {}
                             function_id = fc.id  # Crucial for the response
 
-                            print(f"\nTool call detected: {function_name} with args {function_args}, ID: {function_id}")
-
+                            print(f"\n{'='*50}")
+                            print(f"Function Call: {function_name}")
+                            print(f"Arguments: {function_args}")
+                            
                             if function_name in self.functions_map:
                                 func_to_call = self.functions_map[function_name]
                                 try:
-                                    print(f"Executing function {function_name}...")
                                     # If it's an async function (like go_to_sleep), await it
                                     if asyncio.iscoroutinefunction(func_to_call):
                                         result = await func_to_call(**function_args)
                                     else:
                                         result = func_to_call(**function_args)
-                                    print(f"Function result: {result}")
+                                    
+                                    print(f"Response: {result}")
+                                    print(f"{'='*50}\n")
                                     
                                     # For go_to_sleep, the session will be closing, so don't attempt to send a response.
                                     if function_name == "go_to_sleep":
@@ -842,24 +897,12 @@ class AudioHandler:
                                         await self.session.send_tool_response(
                                             function_responses=[tool_response_part]
                                         )
-                                        print("Tool response sent back to Gemini")
                                 except Exception as e:
-                                    print(f"Error executing function {function_name}: {e}")
-                                    # If it's go_to_sleep that failed, session might still be open or in weird state
-                                    # but generally, we still try to send an error if not go_to_sleep, 
-                                    # or if session is still connectable.
-                                    if function_name != "go_to_sleep" and self.session:
-                                        try:
-                                            error_tool_response = types.FunctionResponse(
-                                                id=function_id,
-                                                name=function_name,
-                                                response={"error": str(e)}
-                                            )
-                                            await self.session.send_tool_response(
-                                                function_responses=[error_tool_response]
-                                            )
-                                        except Exception as e_send:
-                                            print(f"Failed to send error response for {function_name}: {e_send}")
+                                    print(f"\n{'='*50}")
+                                    print(f"Function Call Error: {function_name}")
+                                    print(f"Arguments: {function_args}")
+                                    print(f"Error: {str(e)}")
+                                    print(f"{'='*50}\n")
                             else:
                                 print(f"Function {function_name} not found in available functions map.")
                                 # Send error response back to Gemini if function not found
@@ -875,25 +918,10 @@ class AudioHandler:
                                         )
                                     except Exception as e:
                                         print(f"Failed to send error response for {function_name}: {e}")
-                    #else:
-                    #            print(f"Function {function_name} not found in available functions map.")
-                    #            # Send error response back to Gemini if function not found
-                    #            error_tool_response = types.FunctionResponse(
-                    #                id=function_id,
-                    #                name=function_name,
-                    #                response={"error": f"Function {function_name} not implemented or available."}
-                    #            )
-                    #            await self.session.send_tool_response(
-                    #                function_responses=[error_tool_response]
-                    #            )
-                    # else:
-                        # print("No tool call in this response part") # Debug if needed
                 
                 # Show listening status when done speaking
-                print("Conversation turn completed, switching to listening mode")
                 self.anim.set_mode("idle")
                 is_speaking = False  # Reset for the next turn
-                print("Listening...")
                 
             except websockets.exceptions.ConnectionClosedOK:
                 print("[Receiver] Connection closed (OK). Exiting receive-loop.")
@@ -903,7 +931,6 @@ class AudioHandler:
                 break
             except asyncio.TimeoutError:
                 # This might occur if we implement a timeout around receive(), but it's complex with async iterators
-                print("[Receiver] Timeout waiting for response, checking sleep event.")
                 continue
             except Exception as e:
                 print(f"Error in _recv_from_gemini: {e}")
@@ -914,11 +941,11 @@ class AudioHandler:
                 # Don't break the loop on other errors unless sleep is also set, just continue
                 await asyncio.sleep(0.1) # Small delay before retrying or continuing
                 continue
-        print("Receive-loop finished.")
+
+        print("[Receiver] Receive task exiting...")
 
     async def _playback(self):
         print("[Playback] Task started.")
-        print("Playback‑loop started…")
         while True:
             if self.sleep_requested_event.is_set():
                 print("[Playback] Sleep event detected, exiting playback-loop.")
@@ -954,36 +981,114 @@ class AudioHandler:
             finally:
                 if 'pcm' in locals() and pcm is not None: # Ensure pcm was fetched and not sentinel
                     self.audio_in_q.task_done()
-        print("Playback-loop finished.")
+        
+        print("[Playback] Playback task exiting...")
 
     # ────────────────────────── cleanup ─────────────────────────────────────
     def _cleanup(self):
         print("Cleaning up…")
+        
+        # Stop animation and turn off LEDs
+        if hasattr(self, 'anim'):
+            try:
+                if hasattr(self.anim, 'led_turn_off'):
+                    self.anim.led_turn_off()  # Turn off LEDs first
+                self.sleep_requested_event.set()  # Signal animator to stop
+                time.sleep(0.1)  # Brief pause for animator to stop
+            except Exception as e:
+                print(f"Error stopping animator and LEDs: {e}")
+        
+        # Cleanup audio streams with proper error handling
         for s in (self.input_stream, self.output_stream):
-            if s and s.is_active():
-                s.stop_stream()
-            if s:
-                s.close()
+            try:
+                if s and s.is_active():
+                    s.stop_stream()
+                    time.sleep(0.1)  # Small delay between stop and close
+                if s:
+                    s.close()
+            except Exception as e:
+                print(f"Error cleaning up stream: {e}")
+        
+        # Cleanup wave files
         for wf in (self.sent_wf, self.recv_wf):
-            wf.close()
-        self.pya.terminate()
-        print("Done.")
-        # Cleanup display
+            try:
+                if wf:
+                    wf.close()
+            except Exception as e:
+                print(f"Error closing wave file: {e}")
+        
+        # Terminate PyAudio with delay
         try:
-            self.disp.clear()
-            self.disp.bl_DutyCycle(0)
-            self.disp.module_exit()
-        except Exception:
-            pass
+            if self.pya:
+                self.pya.terminate()
+                time.sleep(0.5)  # Longer delay after PyAudio termination
+        except Exception as e:
+            print(f"Error terminating PyAudio: {e}")
+            
+        # Cleanup display - this needs to be done carefully due to gpiozero
+        try:
+            if hasattr(self, 'disp'):
+                # First try the display's own cleanup methods
+                try:
+                    self.disp.clear()
+                    self.disp.bl_DutyCycle(0)
+                    self.disp.module_exit()
+                except Exception as disp_e:
+                    print(f"Display cleanup methods failed: {disp_e}")
+                
+                # Now clean up GPIO resources
+                try:
+                    # First try to clean up gpiozero devices
+                    import gpiozero
+                    # Force close all gpiozero devices
+                    try:
+                        gpiozero.Device.pin_factory.close()
+                        print("gpiozero pin factory closed successfully")
+                    except AttributeError:
+                        # Fallback for older gpiozero versions
+                        try:
+                            gpiozero.Device.pin_factory.reset()
+                            print("gpiozero devices reset successfully")
+                        except AttributeError:
+                            print("gpiozero cleanup method not available")
+                except ImportError:
+                    print("gpiozero not available for cleanup")
+                except Exception as gz_e:
+                    print(f"gpiozero cleanup error: {gz_e}")
+                
+                # Give a moment for gpiozero to fully release pins
+                time.sleep(0.5)
+                
+                # Then clean up RPi.GPIO as backup
+                try:
+                    import RPi.GPIO as GPIO
+                    # Clean up the specific pins used by display
+                    GPIO.setmode(GPIO.BCM)
+                    for pin in [12, 13, 26]:  # rst, bl, dc pins
+                        try:
+                            GPIO.setup(pin, GPIO.IN)  # Set to input to release
+                            GPIO.cleanup(pin)
+                        except:
+                            pass
+                    GPIO.cleanup()  # Clean up all GPIO
+                    print("RPi.GPIO cleanup completed")
+                except Exception as gpio_e:
+                    print(f"RPi.GPIO cleanup error: {gpio_e}")
+                    
+        except Exception as e:
+            print(f"Error cleaning up display: {e}")
+            
+        print("Cleanup completed.")
+        # Additional delay to ensure all resources are fully released
+        time.sleep(1)
 
     # ────────────────────────── main entry ──────────────────────────────────
     async def run(self):
-        print("[AudioHandler] Starting run method...")
+        print("[AudioHandler] Starting...")
         if not os.getenv("GOOGLE_API_KEY"):
             print("[AudioHandler] Error: GOOGLE_API_KEY environment variable not set")
             return
 
-        print("[AudioHandler] Setting up streams...")
         self.sleep_requested_event.clear() # Clear event at the start of a new run
 
         # set loop reference (if not set in __init__)
@@ -992,37 +1097,45 @@ class AudioHandler:
 
         try:
             await self.setup_streams()
-            print("[AudioHandler] Streams setup completed")
 
             print("[AudioHandler] Connecting to Gemini Live...")
-            self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"),
-                                    http_options=types.HttpOptions(api_version="v1beta"))
+            self.client = genai.Client(
+                http_options={"api_version": "v1beta"},
+                api_key=os.getenv("GOOGLE_API_KEY")
+            )
             
-            print("[AudioHandler] Creating Gemini session...")
             async with self.client.aio.live.connect(model=MODEL, config=CONFIG) as sess:
-                print("[AudioHandler] Gemini session created successfully")
+                print("[AudioHandler] Connected. Listening...")
                 self.session = sess
+                
+                # Run LED initialization sequence
+                await self.anim.run_initialization()
+                
                 self.anim.set_mode("idle") # Set initial animation to idle
-                print("[AudioHandler] Listening...")
 
                 try:
                     async with asyncio.TaskGroup() as tg:
-                        print("[AudioHandler] Creating tasks...")
                         send_task = tg.create_task(self._send_to_gemini())
                         recv_task = tg.create_task(self._recv_from_gemini())
                         playback_task = tg.create_task(self._playback())
                         anim_task = tg.create_task(self.anim.run())
-                        vision_task = tg.create_task(self._vision_feed(interval=2))
-                        print("[AudioHandler] All tasks created successfully")
+                        vision_task = tg.create_task(self._vision_feed(interval=self.face_tracker.face_tracking_interval if self.face_tracker.face_detection_enabled else 8))
+                        
+                        # Add a monitoring task to help debug when tasks complete
+                        async def monitor_sleep():
+                            while not self.sleep_requested_event.is_set():
+                                await asyncio.sleep(0.1)
+                            # Give tasks a moment to see the sleep event and start cleanup
+                            await asyncio.sleep(1)
+                        
+                        monitor_task = tg.create_task(monitor_sleep())
+                        
                 except Exception as e:
                     print(f"[AudioHandler] Error in task group: {e}")
                     print("[AudioHandler] Task group traceback:")
                     traceback.print_exc()
                     raise
 
-                print("[AudioHandler] TaskGroup finished")
-
-            print("[AudioHandler] Gemini session closed")
             self.session = None
         except Exception as e:
             print(f"[AudioHandler] Error in run method: {e}")
@@ -1030,7 +1143,7 @@ class AudioHandler:
             traceback.print_exc()
             raise
         finally:
-            print("[AudioHandler] Run method completed")
+            print("[AudioHandler] Returning to wake_porcu.py")
 
     # ────────────────────────── static helper ───────────────────────────────
 
