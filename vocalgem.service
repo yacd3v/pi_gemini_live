@@ -1,0 +1,27 @@
+[Unit]
+Description=VocalGem Wake Word Detection Service
+After=network.target sound.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=yannis.achour
+Group=yannis.achour
+WorkingDirectory=/home/yannis.achour/dev2/vocalgem
+Environment=PATH=/home/yannis.achour/dev2/vocalgem/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/yannis.achour/dev2/vocalgem/venv/bin/python /home/yannis.achour/dev2/vocalgem/wake_porcu.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Audio and USB device permissions
+SupplementaryGroups=audio plugdev
+
+# Environment variables for audio
+Environment=ALSA_PCM_CARD=0
+Environment=ALSA_PCM_DEVICE=0
+Environment=PULSE_RUNTIME_PATH=/run/user/1000/pulse
+
+[Install]
+WantedBy=multi-user.target 

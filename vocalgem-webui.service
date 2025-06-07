@@ -1,0 +1,24 @@
+[Unit]
+Description=VocalGem Web UI Control Panel
+After=network.target sound.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/yannis.achour/dev2/vocalgem
+Environment=PATH=/home/yannis.achour/dev2/vocalgem/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=SUDO_USER=yannis.achour
+ExecStart=/home/yannis.achour/dev2/vocalgem/venv/bin/python /home/yannis.achour/dev2/vocalgem/web_ui.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Network access
+Environment=HOST=0.0.0.0
+Environment=PORT=5000
+
+[Install]
+WantedBy=multi-user.target 

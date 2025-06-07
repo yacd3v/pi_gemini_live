@@ -16,9 +16,18 @@ import pyaudio
 import pvporcupine
 from vocal_gemini import AudioHandler
 
+# LED control imports
+sys.path.append("freenove_examples")
+try:
+    from led import Led
+    LED_AVAILABLE = True
+except ImportError:
+    LED_AVAILABLE = False
+    logging.warning("LED module not found. LED indicators will be disabled.")
+
 # ---------- Todo ----------
 
-# TODO : activate leds when wake word is detected
+# ✅ DONE : activate leds when wake word is detected
 # TODO : debug "back to wake word listening" after gemini is done
 # TODO : get direction of arrival when wake word is detected
 
@@ -39,6 +48,75 @@ OUT_WAV = "outputtest.wav"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s")
+
+# ---------- LED control ----------
+class LEDController:
+    """Simple LED controller for wake word detection status"""
+    
+    def __init__(self):
+        self.led = None
+        self.led_initialized = False
+        
+        if LED_AVAILABLE:
+            try:
+                self.led = Led()
+                self.led_initialized = True
+                logging.info("LED controller initialized successfully")
+                # Turn off all LEDs initially
+                self.turn_off()
+            except Exception as e:
+                logging.warning(f"LED initialization failed: {e}")
+                self.led_initialized = False
+        else:
+            logging.info("LED module not available")
+    
+    def set_listening_mode(self):
+        """Set LEDs to blue to indicate listening for wake words"""
+        if not self.led_initialized:
+            return
+        
+        try:
+            # Set all LEDs to blue
+            self.led.strip.set_all_led_color(0, 0, 255)  # RGB: Blue
+            self.led.strip.show()
+            logging.debug("LEDs set to blue (listening mode)")
+        except Exception as e:
+            logging.warning(f"Error setting LEDs to listening mode: {e}")
+    
+    def set_wake_detected_mode(self):
+        """Set LEDs to green to indicate wake word detected"""
+        if not self.led_initialized:
+            return
+        
+        try:
+            # Set all LEDs to green
+            self.led.strip.set_all_led_color(0, 255, 0)  # RGB: Green
+            self.led.strip.show()
+            logging.debug("LEDs set to green (wake word detected)")
+        except Exception as e:
+            logging.warning(f"Error setting LEDs to wake detected mode: {e}")
+    
+    def turn_off(self):
+        """Turn off all LEDs"""
+        if not self.led_initialized:
+            return
+        
+        try:
+            self.led.strip.set_all_led_color(0, 0, 0)  # RGB: Off
+            self.led.strip.show()
+            logging.debug("LEDs turned off")
+        except Exception as e:
+            logging.warning(f"Error turning off LEDs: {e}")
+    
+    def cleanup(self):
+        """Clean up LED resources"""
+        self.turn_off()
+        if self.led:
+            try:
+                # Add any specific cleanup if needed
+                pass
+            except Exception as e:
+                logging.warning(f"Error during LED cleanup: {e}")
 
 # ---------- helpers ----------
 def reset_respeaker_usb():
@@ -126,7 +204,7 @@ def reset_respeaker_usb():
         logging.warning(f"Failed to reset ReSpeaker USB device: {e}")
         return False
 
-def cleanup_audio_resources(p, stream, wf, porcu):
+def cleanup_audio_resources(p, stream, wf, porcu, led_controller=None):
     """Safely cleanup all audio resources"""
     try:
         if stream and stream.is_active():
@@ -153,6 +231,12 @@ def cleanup_audio_resources(p, stream, wf, porcu):
             porcu.delete()
     except Exception as e:
         logging.warning(f"Error deleting Porcupine: {e}")
+    
+    try:
+        if led_controller:
+            led_controller.cleanup()
+    except Exception as e:
+        logging.warning(f"Error cleaning up LEDs: {e}")
 
 def open_pyaudio():
     """Open PyAudio with ReSpeaker device, with debugging info"""
@@ -266,15 +350,23 @@ def main():
         if not os.path.exists(path):
             raise FileNotFoundError(path)
 
+    # Initialize LED controller once
+    led_controller = LEDController()
+    
     # Outer loop for restarting after Gemini sessions
     while True:
         porcu = None
         p = None
         stream = None
         wf = None
-        gemini_requested = False  # Flag to indicate Gemini was requested
+        resources_cleaned = False  # Flag to prevent double cleanup
 
         try:
+            logging.info("=== INITIALIZING: Starting new wake word detection cycle...")
+            
+            # Set LEDs to listening mode (blue)
+            led_controller.set_listening_mode()
+            
             porcu = pvporcupine.create(
                 access_key=ACCESS_KEY,
                 keyword_paths=KEYWORD_PATHS,
@@ -294,7 +386,8 @@ def main():
             consecutive_errors = 0
             max_consecutive_errors = 5  # Only reinitialize after 5 consecutive errors
             
-            while not gemini_requested:
+            # Main wake word detection loop
+            while True:
                 try:
                     raw = stream.read(CHUNK, exception_on_overflow=False)
                     if raw is None:
@@ -353,23 +446,38 @@ def main():
                     consecutive_errors = 0
                         
                     if idx >= 0:
-                        logging.info("Wake word detected! Starting Gemini...")
+                        logging.info("=== WAKE WORD: Wake word detected! Starting Gemini...")
+                        
+                        # Set LEDs to wake detected mode (green)
+                        led_controller.set_wake_detected_mode()
+                        time.sleep(0.5)  # Brief visual feedback
+                        
+                        # Turn off LEDs during Gemini session
+                        led_controller.turn_off()
                         
                         # Cleanup current resources properly
-                        cleanup_audio_resources(p, stream, wf, porcu)
+                        cleanup_audio_resources(p, stream, wf, porcu, led_controller)
                         p = None
                         stream = None
                         wf = None
                         porcu = None
+                        resources_cleaned = True  # Mark as cleaned
                         
                         # Add delay to ensure cleanup
                         time.sleep(1)
                         
-                        # Run Gemini
-                        asyncio.run(run_gemini())
+                        # Run Gemini with error handling
+                        try:
+                            logging.info("=== GEMINI: About to start Gemini session...")
+                            asyncio.run(run_gemini())
+                            logging.info("=== GEMINI: Gemini session completed successfully")
+                        except Exception as gemini_error:
+                            logging.error(f"=== GEMINI ERROR: Error in Gemini session: {gemini_error}")
+                            import traceback
+                            traceback.print_exc()
                         
                         # Break from the inner loop to restart properly
-                        gemini_requested = True
+                        logging.info("=== BREAK: Breaking from wake word loop to restart...")
                         break
 
                 except Exception as e:
@@ -386,7 +494,7 @@ def main():
                     consecutive_errors = 0  # Reset counter
                     
                     # Try to recover by reinitializing everything
-                    cleanup_audio_resources(p, stream, wf, porcu)
+                    cleanup_audio_resources(p, stream, wf, porcu, led_controller)
                     time.sleep(2)
                     
                     # Reset USB device if it's a device-related error
@@ -448,33 +556,42 @@ def main():
                             pass  # Ignore warmup errors
 
         except KeyboardInterrupt:
-            logging.info("Stopping…")
+            logging.info("=== INTERRUPT: Stopping…")
             break  # Exit the outer loop
+        except Exception as outer_error:
+            logging.error(f"=== OUTER ERROR: Unexpected error in outer loop: {outer_error}")
+            import traceback
+            traceback.print_exc()
         finally:
-            cleanup_audio_resources(p, stream, wf, porcu)
+            # Only cleanup if resources haven't been cleaned already
+            if not resources_cleaned:
+                logging.info("=== CLEANUP: Cleaning up resources in finally block...")
+                cleanup_audio_resources(p, stream, wf, porcu, led_controller)
+            else:
+                logging.info("=== CLEANUP: Resources already cleaned, skipping finally cleanup...")
 
         # If we reach here, Gemini session has ended, restart wake word detection
-        if gemini_requested:
-            logging.info("Gemini session ended. Restarting wake word detection in 3 seconds...")
-            time.sleep(3)
-            
-            # Reset ReSpeaker USB device to restore input capabilities
-            logging.info("Resetting ReSpeaker USB device...")
+        logging.info("=== RESTART: Gemini session ended. Restarting wake word detection in 3 seconds...")
+        time.sleep(3)
+        
+        # Reset ReSpeaker USB device to restore input capabilities
+        logging.info("=== RESTART: Resetting ReSpeaker USB device...")
+        reset_success = reset_respeaker_usb()
+        
+        if not reset_success:
+            logging.warning("=== RESTART: First reset attempt failed, trying again...")
+            time.sleep(2)
             reset_success = reset_respeaker_usb()
             
             if not reset_success:
-                logging.warning("First reset attempt failed, trying again...")
-                time.sleep(2)
-                reset_success = reset_respeaker_usb()
-                
-                if not reset_success:
-                    logging.error("USB device reset failed after 2 attempts")
-            
-            # Add longer delay to ensure device is fully ready
-            logging.info("Waiting for device to fully initialize...")
-            time.sleep(5)
-            
-            # Continue to next iteration of outer loop to restart
+                logging.error("=== RESTART: USB device reset failed after 2 attempts")
+        
+        # Add longer delay to ensure device is fully ready
+        logging.info("=== RESTART: Waiting for device to fully initialize...")
+        time.sleep(5)
+        
+        logging.info("=== RESTART: Continuing to next iteration of outer loop...")
+        # Continue to next iteration of outer loop to restart
 
 if __name__ == "__main__":
     main()
