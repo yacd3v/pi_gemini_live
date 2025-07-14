@@ -1,758 +1,1452 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VocalGem Control Panel</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>Robot Control Dashboard - Camera + IMU + Motors</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
-        :root {
-            --primary-color: #2563eb;
-            --success-color: #10b981;
-            --warning-color: #f59e0b;
-            --error-color: #ef4444;
-            --dark-bg: #1f2937;
-            --card-bg: #f8fafc;
-        }
-        
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        
-        .main-container {
-            padding: 2rem 0;
-        }
-        
-        .card {
-            border: none;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
-            background: var(--card-bg);
-        }
-        
-        .card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 15px -3px rgba(0, 0, 0, 0.1);
-        }
-        
-        .btn-custom {
-            border-radius: 8px;
-            padding: 0.5rem 1rem;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-        
-        .btn-primary {
-            background: var(--primary-color);
-            border: none;
-        }
-        
-        .btn-success {
-            background: var(--success-color);
-            border: none;
-        }
-        
-        .btn-warning {
-            background: var(--warning-color);
-            border: none;
-        }
-        
-        .btn-danger {
-            background: var(--error-color);
-            border: none;
-        }
-        
-        .status-indicator {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 0.5rem;
-        }
-        
-        .status-active {
-            background: var(--success-color);
-            animation: pulse 2s infinite;
-        }
-        
-        .status-inactive {
-            background: var(--error-color);
-        }
-        
-        .status-unknown {
-            background: var(--warning-color);
-        }
-        
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
-        }
-        
-        .log-container {
-            background: #1a1a1a;
-            color: #ffffff;
-            font-family: 'Courier New', monospace;
-            font-size: 0.875rem;
-            border-radius: 8px;
-            max-height: 400px;
-            overflow-y: auto;
-            padding: 1rem;
-        }
-        
-        .log-line {
-            margin-bottom: 0.25rem;
-            word-wrap: break-word;
-        }
-        
-        .log-timestamp {
-            color: #64748b;
-            margin-right: 0.5rem;
-        }
-        
-        .header-title {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 15px;
+            background-color: #1a1a1a;
             color: white;
-            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+            font-size: 14px;
         }
-        
-        .diagnostic-item {
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        .safety-warning {
+            background: #5a2d2d;
+            border: 2px solid #ff6b6b;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+        }
+        .section {
+            border: 2px solid #444;
+            border-radius: 10px;
+            background: #2a2a2a;
+            padding: 15px;
+        }
+        .video-section {
+            grid-row: span 2;
+        }
+        .video-container {
+            border: 2px solid #444;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #000;
+            position: relative;
+        }
+        .video-container img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .imu-data {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .data-card {
+            background: #333;
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .data-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .data-label {
+            font-size: 11px;
+            color: #ccc;
+            margin-top: 5px;
+        }
+        #imu-visualization {
+            width: 100%;
+            height: 250px;
+            border-radius: 8px;
+            background: #000;
+        }
+        .status {
+            text-align: center;
+            padding: 8px;
+            background: #333;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 12px;
+        }
+        .status.online { background: #2d5a2d; }
+        .status.offline { background: #5a2d2d; }
+        .status.enabled { background: #2d4a5a; }
+        .motor-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .control-btn {
+            background: #444;
+            border: 2px solid #666;
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .control-btn:hover {
+            background: #555;
+            border-color: #888;
+        }
+        .control-btn:active {
+            background: #333;
+            transform: scale(0.95);
+        }
+        .control-btn.danger {
+            background: #5a2d2d;
+            border-color: #ff6b6b;
+        }
+        .control-btn.danger:hover {
+            background: #6d3636;
+        }
+        .control-btn.primary {
+            background: #2d5a2d;
+            border-color: #4CAF50;
+        }
+        .control-btn.primary:hover {
+            background: #366d36;
+        }
+        .speed-control {
+            margin: 10px 0;
+            text-align: center;
+        }
+        .speed-slider {
+            width: 100%;
+            margin: 10px 0;
+        }
+        .virtual-joystick {
+            width: 150px;
+            height: 150px;
+            border: 2px solid #666;
+            border-radius: 50%;
+            margin: 10px auto;
+            position: relative;
+            background: radial-gradient(circle, #333 30%, #222 100%);
+        }
+        .joystick-knob {
+            width: 40px;
+            height: 40px;
+            background: #4CAF50;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            transition: all 0.1s;
+        }
+        .latency-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: #4CAF50;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        h3 {
+            margin: 0 0 15px 0;
+            color: #fff;
+            font-size: 16px;
+        }
+        /* Navigation-specific styles */
+        .navigation-inputs {
+            margin-bottom: 15px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 13px;
+            color: #ccc;
+        }
+        .input-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #555;
+            border-radius: 4px;
+            background: #333;
+            color: white;
+            font-size: 14px;
+        }
+        .angle-buttons, .distance-buttons {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+        }
+        .angle-buttons button, .distance-buttons button {
+            flex: 1;
+            padding: 5px;
+            border: 1px solid #555;
+            border-radius: 4px;
+            background: #444;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .angle-buttons button:hover, .distance-buttons button:hover {
+            background: #555;
+        }
+        .nav-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .nav-status-display {
+            background: #333;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        .nav-progress {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .progress-bar {
+            flex: 1;
+            height: 10px;
+            background: #555;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4CAF50;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .nav-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 5px;
+            font-size: 12px;
+        }
+        .nav-info-item {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            padding: 0.5rem 0;
-            border-bottom: 1px solid #e5e7eb;
         }
-        
-        .diagnostic-item:last-child {
-            border-bottom: none;
+        .nav-label {
+            color: #ccc;
         }
-        
-        .loading {
-            opacity: 0.6;
-            pointer-events: none;
-        }
-        
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 1050;
-        }
-        
-        .section-title {
-            color: var(--primary-color);
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 0.5rem;
-            margin-bottom: 1.5rem;
+        .nav-safety-info {
+            text-align: center;
+            color: #999;
+            font-size: 11px;
         }
     </style>
 </head>
 <body>
-    <div class="container-fluid main-container">
-        <!-- Header -->
-        <div class="row mb-4">
-            <div class="col-12 text-center">
-                <h1 class="header-title">
-                    <i class="fas fa-microphone-alt"></i>
-                    VocalGem Control Panel
-                </h1>
-                <p class="text-white-50">Manage your wake word detection service</p>
-            </div>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Robot Control Dashboard</h1>
+            <p>Camera + IMU + Motor Controls - Low Latency Stream</p>
         </div>
-
-        <!-- Status Overview -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="section-title">
-                            <i class="fas fa-tachometer-alt"></i>
-                            System Status
-                        </h5>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="d-flex align-items-center mb-2">
-                                    <span class="status-indicator status-unknown" id="service-status-indicator"></span>
-                                    <strong>Service Status:</strong>
-                                    <span class="ms-2" id="service-status">Checking...</span>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="d-flex align-items-center mb-2">
-                                    <span class="status-indicator status-unknown" id="enabled-status-indicator"></span>
-                                    <strong>Auto-start:</strong>
-                                    <span class="ms-2" id="enabled-status">Checking...</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="mt-3">
-                            <button class="btn btn-primary btn-custom me-2" onclick="refreshStatus()">
-                                <i class="fas fa-sync-alt"></i> Refresh Status
-                            </button>
-                            <button class="btn btn-info btn-custom" onclick="runDiagnostics()">
-                                <i class="fas fa-stethoscope"></i> Run Diagnostics
-                            </button>
-                        </div>
+        
+        <div class="safety-warning">
+            ⚠️ <strong>SAFETY WARNING:</strong> Motor controls are DISABLED by default. 
+            Enable only when robot is in a safe area with adequate clearance.
+        </div>
+        
+        <div style="background: #2d4a5a; border: 2px solid #4a9eff; padding: 10px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+            🚀 <strong>ULTRA-LOW LATENCY MODE:</strong> Optimized for minimal delay. 
+            Lower resolution and quality for maximum responsiveness. Use debug controls to fine-tune.
+        </div>
+        
+        <div style="background: #2d5a2d; border: 2px solid #4CAF50; padding: 10px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+            ⌨️ <strong>KEYBOARD CONTROLS ENABLED:</strong> Use WASD for movement, arrow keys for camera, F1 to toggle motors, H for help.
+            <br>🎮 Motors: W/S=Forward/Back, A/D=Left/Right, Q/E=Strafe, Space=Stop
+            <br>🎥 Camera: ←→=Pan, ↑↓=Tilt, Home=Center
+        </div>
+        
+        <div class="content">
+            <!-- Camera Section -->
+            <div class="video-section section">
+                <h3>📷 Camera Feed</h3>
+                <div class="video-container">
+                    <img src="/video_feed" alt="Robot Camera Stream" id="video-stream">
+                    <div class="latency-indicator" id="latency">Latency: --ms</div>
+                </div>
+            </div>
+            
+            <!-- IMU Section -->
+            <div class="section">
+                <h3>📡 IMU Sensor</h3>
+                <div class="status" id="imu-status">
+                    <span id="status-text">Connecting to IMU...</span>
+                </div>
+                
+                <div class="imu-data">
+                    <div class="data-card">
+                        <div class="data-value" id="roll">0.0°</div>
+                        <div class="data-label">Roll</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="pitch">0.0°</div>
+                        <div class="data-label">Pitch</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="yaw">0.0°</div>
+                        <div class="data-label">Yaw</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="accel">0.0</div>
+                        <div class="data-label">Accel (m/s²)</div>
+                    </div>
+                </div>
+                
+                <!-- Ultrasonic Sensor Data -->
+                <div class="imu-data">
+                    <div class="data-card" style="grid-column: span 2; border: 2px solid #4CAF50;" id="distance-card">
+                        <div class="data-value" id="distance" style="color: #4CAF50;">0.00m</div>
+                        <div class="data-label">Distance (Ultrasonic)</div>
+                    </div>
+                </div>
+                
+                <div id="imu-visualization"></div>
+            </div>
+            
+            <!-- Battery Status Section -->
+            <div class="section">
+                <h3>🔋 Battery Status</h3>
+                <div class="status" id="battery-status">
+                    <span id="battery-status-text">Connecting to battery...</span>
+                </div>
+                
+                <div class="imu-data">
+                    <div class="data-card">
+                        <div class="data-value" id="battery-percent">0%</div>
+                        <div class="data-label">Battery Level</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="battery-voltage">0mV</div>
+                        <div class="data-label">Voltage</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="battery-current">0mA</div>
+                        <div class="data-label">Current</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="charging-state">Unknown</div>
+                        <div class="data-label">Charging</div>
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Service Management -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="section-title">
-                            <i class="fas fa-cogs"></i>
-                            Service Management
-                        </h5>
-                        <div class="row">
-                            <div class="col-lg-6">
-                                <h6 class="mb-3">Basic Controls</h6>
-                                <div class="d-flex flex-wrap gap-2 mb-3">
-                                    <button class="btn btn-success btn-custom" onclick="serviceAction('start')">
-                                        <i class="fas fa-play"></i> Start
-                                    </button>
-                                    <button class="btn btn-warning btn-custom" onclick="serviceAction('stop')">
-                                        <i class="fas fa-stop"></i> Stop
-                                    </button>
-                                    <button class="btn btn-primary btn-custom" onclick="serviceAction('restart')">
-                                        <i class="fas fa-redo"></i> Restart
-                                    </button>
-                                    <button class="btn btn-info btn-custom" onclick="serviceAction('status')">
-                                        <i class="fas fa-info-circle"></i> Status
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="col-lg-6">
-                                <h6 class="mb-3">Startup Controls</h6>
-                                <div class="d-flex flex-wrap gap-2 mb-3">
-                                    <button class="btn btn-success btn-custom" onclick="serviceAction('enable')">
-                                        <i class="fas fa-check"></i> Enable Auto-start
-                                    </button>
-                                    <button class="btn btn-warning btn-custom" onclick="serviceAction('disable')">
-                                        <i class="fas fa-times"></i> Disable Auto-start
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
+            
+            <!-- Chassis Battery Status Section -->
+            <div class="section">
+                <h3>🔋 Chassis Battery</h3>
+                <div class="status" id="chassis-battery-status">
+                    <span id="chassis-battery-status-text">Connecting to chassis battery...</span>
+                </div>
+                
+                <div class="imu-data">
+                    <div class="data-card">
+                        <div class="data-value" id="chassis-battery-voltage">0.00V</div>
+                        <div class="data-label">Voltage</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="chassis-battery-current">0.00A</div>
+                        <div class="data-label">Current</div>
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Logs Section -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="section-title">
-                            <i class="fas fa-file-alt"></i>
-                            Logs & Monitoring
-                        </h5>
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <h6>Log Controls</h6>
-                                <div class="d-flex flex-wrap gap-2 mb-3">
-                                    <button class="btn btn-primary btn-custom" onclick="startLogStream('live')">
-                                        <i class="fas fa-play"></i> Live Logs
-                                    </button>
-                                    <button class="btn btn-secondary btn-custom" onclick="getLogs('recent')">
-                                        <i class="fas fa-history"></i> Recent (50)
-                                    </button>
-                                    <button class="btn btn-info btn-custom" onclick="getLogs('today')">
-                                        <i class="fas fa-calendar-day"></i> Today
-                                    </button>
-                                    <button class="btn btn-warning btn-custom" onclick="stopLogStream()">
-                                        <i class="fas fa-stop"></i> Stop Stream
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <h6>Filtered Logs</h6>
-                                <div class="d-flex flex-wrap gap-2 mb-3">
-                                    <button class="btn btn-danger btn-custom" onclick="getLogs('errors')">
-                                        <i class="fas fa-exclamation-triangle"></i> Errors
-                                    </button>
-                                    <button class="btn btn-success btn-custom" onclick="getLogs('wake')">
-                                        <i class="fas fa-microphone"></i> Wake Words
-                                    </button>
-                                    <button class="btn btn-info btn-custom" onclick="getLogs('led')">
-                                        <i class="fas fa-lightbulb"></i> LED Events
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="log-container" id="log-container">
-                            <div class="text-center text-muted">
-                                <i class="fas fa-info-circle"></i>
-                                Click on a log button to view logs
-                            </div>
-                        </div>
-                        <div class="mt-2">
-                            <button class="btn btn-warning btn-custom btn-sm" onclick="cleanupLogs()">
-                                <i class="fas fa-trash"></i> Cleanup Old Logs
-                            </button>
-                            <button class="btn btn-secondary btn-custom btn-sm" onclick="clearLogDisplay()">
-                                <i class="fas fa-eraser"></i> Clear Display
-                            </button>
-                        </div>
+            
+            <!-- Camera Servo Controls Section -->
+            <div class="section">
+                <h3>🎥 Camera Controls</h3>
+                <div class="status" id="servo-status">
+                    <span id="servo-status-text">Connecting to servos...</span>
+                </div>
+                
+                <div class="imu-data">
+                    <div class="data-card">
+                        <div class="data-value" id="servo-pan">90°</div>
+                        <div class="data-label">Pan</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="servo-tilt">90°</div>
+                        <div class="data-label">Tilt</div>
+                    </div>
+                </div>
+                
+                <!-- Pan Controls -->
+                <div class="motor-controls">
+                    <div class="control-btn" onclick="moveServo('pan', -10)">
+                        ⬅️ Pan Left
+                    </div>
+                    <div class="control-btn" onclick="centerCamera()">
+                        🎯 Center
+                    </div>
+                    <div class="control-btn" onclick="moveServo('pan', 10)">
+                        ➡️ Pan Right
+                    </div>
+                </div>
+                
+                <!-- Tilt Controls -->
+                <div class="motor-controls">
+                    <div class="control-btn" onclick="moveServo('tilt', -10)">
+                        ⬆️ Tilt Up
+                    </div>
+                    <div class="control-btn" onclick="moveServo('tilt', 0)">
+                        🎯 Level
+                    </div>
+                    <div class="control-btn" onclick="moveServo('tilt', 10)">
+                        ⬇️ Tilt Down
+                    </div>
+                </div>
+                
+                <!-- Fine Control -->
+                <div class="speed-control">
+                    <label>Pan: <span id="pan-value">90</span>°</label>
+                    <input type="range" class="speed-slider" id="pan-slider" min="0" max="180" value="90" onchange="setServoAngle('pan')">
+                </div>
+                
+                <div class="speed-control">
+                    <label>Tilt: <span id="tilt-value">90</span>°</label>
+                    <input type="range" class="speed-slider" id="tilt-slider" min="0" max="180" value="90" onchange="setServoAngle('tilt')">
+                </div>
+            </div>
+            
+            <!-- Audio/DOA Section -->
+            <div class="section">
+                <h3>🎤 Audio & DOA</h3>
+                <div class="status" id="audio-status">
+                    <span id="audio-status-text">Connecting to audio...</span>
+                </div>
+                
+                <div class="imu-data">
+                    <div class="data-card">
+                        <div class="data-value" id="doa-angle">0°</div>
+                        <div class="data-label">Direction of Arrival</div>
+                    </div>
+                    <div class="data-card">
+                        <div class="data-value" id="volume-level">0dB</div>
+                        <div class="data-label">Volume Level</div>
+                    </div>
+                </div>
+                
+                <!-- DOA Visualization -->
+                <div id="doa-visualization" style="width: 100%; height: 200px; border-radius: 8px; background: #000; position: relative; margin-bottom: 15px;">
+                    <canvas id="doa-canvas" width="200" height="200" style="width: 100%; height: 100%;"></canvas>
+                </div>
+                
+                <!-- Voice Activity Indicator -->
+                <div class="data-card" id="voice-activity-card" style="grid-column: span 2; border: 2px solid #666;">
+                    <div class="data-value" id="voice-activity" style="color: #666;">No Voice</div>
+                    <div class="data-label">Voice Activity</div>
+                </div>
+                
+                <!-- Robot Mode Controls -->
+                <div class="motor-controls" style="margin-top: 15px;">
+                    <div class="control-btn primary" onclick="enableRobotMode()" id="enable-robot-btn">
+                        🤖 ENABLE ROBOT MODE
+                    </div>
+                    <div class="control-btn" onclick="disableRobotMode()" id="disable-robot-btn">
+                        🏠 RESTORE DESKTOP AUDIO
+                    </div>
+                </div>
+                
+                <div class="status" id="robot-mode-status" style="margin-top: 10px;">
+                    <span id="robot-mode-text">Robot mode: Auto-managed</span>
+                </div>
+            </div>
+            
+            <!-- Motor Controls Section -->
+            <div class="section">
+                <h3>🚗 Motor Controls</h3>
+                <div class="status" id="motor-status">
+                    <span id="motor-status-text">Motors DISABLED</span>
+                </div>
+                
+                <!-- Enable/Disable Controls -->
+                <div class="motor-controls">
+                    <div class="control-btn primary" onclick="enableMotors()">
+                        🟢 ENABLE
+                    </div>
+                    <div class="control-btn danger" onclick="emergencyStop()">
+                        🛑 E-STOP
+                    </div>
+                    <div class="control-btn" onclick="disableMotors()">
+                        ⚫ DISABLE
+                    </div>
+                </div>
+                
+                <!-- Movement Controls -->
+                <div class="motor-controls">
+                    <div></div>
+                    <div class="control-btn" onmousedown="startMovement('forward')" onmouseup="stopMovement()" ontouchstart="startMovement('forward')" ontouchend="stopMovement()">
+                        ⬆️ FWD
+                    </div>
+                    <div></div>
+                    
+                    <div class="control-btn" onmousedown="startMovement('left')" onmouseup="stopMovement()" ontouchstart="startMovement('left')" ontouchend="stopMovement()">
+                        ⬅️ LEFT
+                    </div>
+                    <div class="control-btn danger" onclick="emergencyStop()">
+                        ⏹️ STOP
+                    </div>
+                    <div class="control-btn" onmousedown="startMovement('right')" onmouseup="stopMovement()" ontouchstart="startMovement('right')" ontouchend="stopMovement()">
+                        ➡️ RIGHT
+                    </div>
+                    
+                    <div></div>
+                    <div class="control-btn" onmousedown="startMovement('backward')" onmouseup="stopMovement()" ontouchstart="startMovement('backward')" ontouchend="stopMovement()">
+                        ⬇️ BACK
+                    </div>
+                    <div></div>
+                </div>
+                
+                <!-- Strafe Controls -->
+                <div class="motor-controls">
+                    <div class="control-btn" onmousedown="startMovement('strafe_left')" onmouseup="stopMovement()" ontouchstart="startMovement('strafe_left')" ontouchend="stopMovement()">
+                        ↖️ STR-L
+                    </div>
+                    <div class="control-btn" onmousedown="startMovement('spin_left')" onmouseup="stopMovement()" ontouchstart="startMovement('spin_left')" ontouchend="stopMovement()">
+                        🔄 SPIN-L
+                    </div>
+                    <div class="control-btn" onmousedown="startMovement('strafe_right')" onmouseup="stopMovement()" ontouchstart="startMovement('strafe_right')" ontouchend="stopMovement()">
+                        ↗️ STR-R
+                    </div>
+                </div>
+                
+                <!-- Speed Control -->
+                <div class="speed-control">
+                    <label>Speed: <span id="speed-value">50</span>%</label>
+                    <input type="range" class="speed-slider" id="speed-slider" min="10" max="100" value="50" onchange="updateSpeed()">
+                </div>
+                
+                <!-- Debug Controls -->
+                <div class="motor-controls">
+                    <div class="control-btn" onclick="toggleOverlays()">
+                        🎥 Toggle Overlays
+                    </div>
+                    <div class="control-btn" onclick="checkLatency()">
+                        📊 Check Latency
+                    </div>
+                    <div class="control-btn" onclick="showKeyboardHelp()">
+                        ⌨️ Keyboard Help
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Testing & Audio -->
-        <div class="row mb-4">
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="section-title">
-                            <i class="fas fa-vial"></i>
-                            Testing
-                        </h5>
-                        <div class="d-flex flex-wrap gap-2 mb-3">
-                            <button class="btn btn-primary btn-custom" onclick="runTest('boot')">
-                                <i class="fas fa-power-off"></i> Boot Test
-                            </button>
-                            <button class="btn btn-success btn-custom" onclick="runTest('led')">
-                                <i class="fas fa-lightbulb"></i> LED Test
-                            </button>
-                            <button class="btn btn-info btn-custom" onclick="runTest('audio-list')">
-                                <i class="fas fa-volume-up"></i> Audio Devices
-                            </button>
+            
+            <!-- Navigation Controls Section -->
+            <div class="section">
+                <h3>🧭 Navigation Controls</h3>
+                <div class="status" id="navigation-status">
+                    <span id="navigation-status-text">Navigation Ready</span>
+                </div>
+                
+                <!-- Navigation Input Controls -->
+                <div class="navigation-inputs">
+                    <div class="input-group">
+                        <label>Angle (degrees):</label>
+                        <input type="number" id="nav-angle" min="-360" max="360" value="0" step="5">
+                        <div class="angle-buttons">
+                            <button onclick="setAngle(0)">0°</button>
+                            <button onclick="setAngle(90)">90°</button>
+                            <button onclick="setAngle(180)">180°</button>
+                            <button onclick="setAngle(270)">270°</button>
+                        </div>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label>Distance (meters):</label>
+                        <input type="number" id="nav-distance" min="0.1" max="5.0" value="0.5" step="0.1">
+                        <div class="distance-buttons">
+                            <button onclick="setDistance(0.3)">30cm</button>
+                            <button onclick="setDistance(0.5)">50cm</button>
+                            <button onclick="setDistance(1.0)">1m</button>
+                            <button onclick="setDistance(2.0)">2m</button>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="section-title">
-                            <i class="fas fa-volume-up"></i>
-                            Audio Controls
-                        </h5>
-                        <div class="d-flex flex-wrap gap-2 mb-3">
-                            <button class="btn btn-info btn-custom" onclick="audioAction('devices')">
-                                <i class="fas fa-list"></i> List Devices
-                            </button>
-                            <button class="btn btn-warning btn-custom" onclick="audioAction('reset-usb')">
-                                <i class="fas fa-sync"></i> Reset USB
-                            </button>
-                            <button class="btn btn-primary btn-custom" onclick="audioAction('test-record')">
-                                <i class="fas fa-microphone"></i> Test Record
-                            </button>
+                
+                <!-- Navigation Control Buttons -->
+                <div class="nav-controls">
+                    <div class="control-btn primary" onclick="startNavigation()">
+                        🚀 START NAVIGATION
+                    </div>
+                    <div class="control-btn danger" onclick="stopNavigation()">
+                        🛑 STOP NAVIGATION
+                    </div>
+                </div>
+                
+                <!-- Navigation Status Display -->
+                <div class="nav-status-display">
+                    <div class="nav-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="nav-progress-fill"></div>
+                        </div>
+                        <span id="nav-progress-text">0%</span>
+                    </div>
+                    
+                    <div class="nav-info">
+                        <div class="nav-info-item">
+                            <span class="nav-label">Current Angle:</span>
+                            <span id="nav-current-angle">0°</span>
+                        </div>
+                        <div class="nav-info-item">
+                            <span class="nav-label">Target Angle:</span>
+                            <span id="nav-target-angle">0°</span>
+                        </div>
+                        <div class="nav-info-item">
+                            <span class="nav-label">Distance:</span>
+                            <span id="nav-distance-traveled">0.0m</span> / <span id="nav-target-distance">0.0m</span>
+                        </div>
+                        <div class="nav-info-item">
+                            <span class="nav-label">Status:</span>
+                            <span id="nav-status-message">Ready</span>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-
-        <!-- Troubleshooting -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="section-title">
-                            <i class="fas fa-tools"></i>
-                            Troubleshooting
-                        </h5>
-                        <div class="alert alert-warning" role="alert">
-                            <i class="fas fa-exclamation-triangle"></i>
-                            <strong>Warning:</strong> These actions may affect running services. Use with caution.
-                        </div>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <h6>Emergency Controls</h6>
-                                <div class="d-flex flex-wrap gap-2 mb-3">
-                                    <button class="btn btn-danger btn-custom" onclick="troubleshootAction('force-kill')">
-                                        <i class="fas fa-skull"></i> Force Kill
-                                    </button>
-                                    <button class="btn btn-warning btn-custom" onclick="troubleshootAction('force-stop')">
-                                        <i class="fas fa-hand-paper"></i> Force Stop
-                                    </button>
-                                    <button class="btn btn-info btn-custom" onclick="troubleshootAction('gpio-cleanup')">
-                                        <i class="fas fa-broom"></i> GPIO Cleanup
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <h6>System Reset</h6>
-                                <div class="d-flex flex-wrap gap-2 mb-3">
-                                    <button class="btn btn-danger btn-custom" onclick="confirmCompleteReset()">
-                                        <i class="fas fa-redo-alt"></i> Complete Reset
-                                    </button>
-                                    <button class="btn btn-info btn-custom" onclick="troubleshootAction('venv-check')">
-                                        <i class="fas fa-check-circle"></i> Check Virtual Env
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Diagnostics Results -->
-        <div class="row mb-4" id="diagnostics-section" style="display: none;">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="section-title">
-                            <i class="fas fa-stethoscope"></i>
-                            Diagnostics Results
-                        </h5>
-                        <div id="diagnostics-results"></div>
-                    </div>
+                
+                <!-- Safety Information -->
+                <div class="nav-safety-info">
+                    <small>⚠️ Navigation uses IMU for heading control and ultrasonic for collision avoidance</small>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Toast Container -->
-    <div class="toast-container" id="toast-container"></div>
-
-    <!-- Confirmation Modal -->
-    <div class="modal fade" id="confirmModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Confirm Action</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body" id="confirmModalBody">
-                    Are you sure you want to perform this action?
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-danger" id="confirmModalButton">Confirm</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
     <script>
-        const socket = io();
-        let logStreamActive = false;
-
-        // Initialize page
-        document.addEventListener('DOMContentLoaded', function() {
-            refreshStatus();
-        });
-
-        // Socket events
-        socket.on('connect', function() {
-            console.log('Connected to server');
-        });
-
-        socket.on('log_line', function(data) {
-            appendLogLine(data.timestamp, data.line);
-        });
-
-        socket.on('log_end', function() {
-            logStreamActive = false;
-            showToast('Log stream ended', 'info');
-        });
-
-        socket.on('log_error', function(data) {
-            logStreamActive = false;
-            showToast('Log stream error: ' + data.error, 'danger');
-        });
-
-        // Utility functions
-        function showToast(message, type = 'info') {
-            const toastHtml = `
-                <div class="toast" role="alert">
-                    <div class="toast-header">
-                        <i class="fas fa-info-circle text-${type} me-2"></i>
-                        <strong class="me-auto">VocalGem</strong>
-                        <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
-                    </div>
-                    <div class="toast-body">${message}</div>
-                </div>
-            `;
+        // Global variables
+        let scene, camera, renderer, cube;
+        let isInitialized = false;
+        let motorsEnabled = false;
+        let currentMovement = null;
+        let currentSpeed = 50;
+        let frameStats = {served: 0, dropped: 0};
+        
+        // Three.js IMU visualization
+        function initVisualization() {
+            const container = document.getElementById('imu-visualization');
             
-            const toastContainer = document.getElementById('toast-container');
-            const toastElement = document.createElement('div');
-            toastElement.innerHTML = toastHtml;
-            toastContainer.appendChild(toastElement);
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
             
-            const toast = new bootstrap.Toast(toastElement.querySelector('.toast'));
-            toast.show();
+            camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.z = 5;
             
-            setTimeout(() => {
-                toastElement.remove();
-            }, 5000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+            
+            const geometry = new THREE.BoxGeometry(2, 1, 1);
+            const material = new THREE.MeshBasicMaterial({ 
+                color: 0x4CAF50,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.8
+            });
+            cube = new THREE.Mesh(geometry, material);
+            scene.add(cube);
+            
+            const axesHelper = new THREE.AxesHelper(3);
+            scene.add(axesHelper);
+            
+            isInitialized = true;
+            animate();
         }
-
-        function setLoadingState(element, loading) {
-            if (loading) {
-                element.classList.add('loading');
-                element.disabled = true;
-            } else {
-                element.classList.remove('loading');
-                element.disabled = false;
-            }
+        
+        function animate() {
+            if (!isInitialized) return;
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
         }
-
-        function updateStatusIndicator(indicatorId, status) {
-            const indicator = document.getElementById(indicatorId);
-            indicator.className = 'status-indicator';
+        
+        function updateVisualization(roll, pitch, yaw) {
+            if (!isInitialized || !cube) return;
             
-            if (status === 'active') {
-                indicator.classList.add('status-active');
-            } else if (status === 'inactive') {
-                indicator.classList.add('status-inactive');
-            } else {
-                indicator.classList.add('status-unknown');
-            }
+            const rollRad = THREE.MathUtils.degToRad(roll);
+            const pitchRad = THREE.MathUtils.degToRad(pitch);
+            const yawRad = THREE.MathUtils.degToRad(yaw);
+            
+            cube.rotation.set(pitchRad, yawRad, rollRad);
         }
-
-        // API functions
-        async function serviceAction(action) {
-            try {
-                const response = await fetch(`/service/${action}`);
-                const result = await response.json();
-                
-                if (result.success) {
-                    showToast(`Service ${action} completed successfully`, 'success');
-                    if (result.stdout) {
-                        appendLogLine(new Date().toLocaleTimeString(), result.stdout);
+        
+        // Motor control functions
+        function enableMotors() {
+            if (confirm('⚠️ Are you sure you want to ENABLE motors? Ensure robot is in a safe area!')) {
+                fetch('/motor_control', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: 'enable'})
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        motorsEnabled = true;
+                        updateMotorStatus();
                     }
-                } else {
-                    showToast(`Service ${action} failed: ${result.stderr}`, 'danger');
-                    if (result.stderr) {
-                        appendLogLine(new Date().toLocaleTimeString(), result.stderr);
-                    }
-                }
-                
-                // Refresh status after service actions
-                setTimeout(refreshStatus, 1000);
-            } catch (error) {
-                showToast(`Error: ${error.message}`, 'danger');
-            }
-        }
-
-        async function refreshStatus() {
-            try {
-                const [statusResponse, enabledResponse] = await Promise.all([
-                    fetch('/service/is-active'),
-                    fetch('/service/is-enabled')
-                ]);
-                
-                const statusResult = await statusResponse.json();
-                const enabledResult = await enabledResponse.json();
-                
-                // Update service status
-                const statusText = statusResult.success ? 'Active' : 'Inactive';
-                document.getElementById('service-status').textContent = statusText;
-                updateStatusIndicator('service-status-indicator', statusResult.success ? 'active' : 'inactive');
-                
-                // Update enabled status
-                const enabledText = enabledResult.success ? 'Enabled' : 'Disabled';
-                document.getElementById('enabled-status').textContent = enabledText;
-                updateStatusIndicator('enabled-status-indicator', enabledResult.success ? 'active' : 'inactive');
-                
-            } catch (error) {
-                showToast(`Error refreshing status: ${error.message}`, 'danger');
-            }
-        }
-
-        async function getLogs(logType) {
-            try {
-                const response = await fetch(`/logs/${logType}`);
-                const result = await response.json();
-                
-                const logContainer = document.getElementById('log-container');
-                logContainer.innerHTML = '';
-                
-                if (result.success && result.stdout) {
-                    const lines = result.stdout.split('\n');
-                    lines.forEach(line => {
-                        if (line.trim()) {
-                            appendLogLine(new Date().toLocaleTimeString(), line);
-                        }
-                    });
-                } else {
-                    logContainer.innerHTML = `<div class="text-danger">No logs found or error: ${result.stderr}</div>`;
-                }
-            } catch (error) {
-                showToast(`Error getting logs: ${error.message}`, 'danger');
-            }
-        }
-
-        function startLogStream(logType) {
-            if (logStreamActive) {
-                stopLogStream();
-            }
-            
-            logStreamActive = true;
-            document.getElementById('log-container').innerHTML = '<div class="text-info">Starting log stream...</div>';
-            socket.emit('start_log_stream', { log_type: logType });
-            showToast('Started log stream', 'info');
-        }
-
-        function stopLogStream() {
-            if (logStreamActive) {
-                logStreamActive = false;
-                socket.emit('stop_log_stream');
-                showToast('Stopped log stream', 'info');
-            }
-        }
-
-        function appendLogLine(timestamp, line) {
-            const logContainer = document.getElementById('log-container');
-            const logLine = document.createElement('div');
-            logLine.className = 'log-line';
-            logLine.innerHTML = `<span class="log-timestamp">[${timestamp}]</span><span>${line}</span>`;
-            
-            if (logContainer.innerHTML.includes('Click on a log button') || 
-                logContainer.innerHTML.includes('Starting log stream')) {
-                logContainer.innerHTML = '';
-            }
-            
-            logContainer.appendChild(logLine);
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
-
-        function clearLogDisplay() {
-            const logContainer = document.getElementById('log-container');
-            logContainer.innerHTML = '<div class="text-center text-muted"><i class="fas fa-info-circle"></i> Log display cleared</div>';
-        }
-
-        async function runTest(testType) {
-            try {
-                showToast(`Running ${testType} test...`, 'info');
-                const response = await fetch(`/test/${testType}`);
-                const result = await response.json();
-                
-                const logContainer = document.getElementById('log-container');
-                logContainer.innerHTML = `<div class="text-info">Test Results for ${testType}:</div><hr>`;
-                
-                if (result.success && result.stdout) {
-                    appendLogLine(new Date().toLocaleTimeString(), result.stdout);
-                } else {
-                    appendLogLine(new Date().toLocaleTimeString(), `Test failed: ${result.stderr}`);
-                }
-                
-                showToast(`${testType} test completed`, result.success ? 'success' : 'warning');
-            } catch (error) {
-                showToast(`Error running test: ${error.message}`, 'danger');
-            }
-        }
-
-        async function audioAction(action) {
-            try {
-                showToast(`Running audio ${action}...`, 'info');
-                const response = await fetch(`/audio/${action}`);
-                const result = await response.json();
-                
-                if (result.success) {
-                    showToast(`Audio ${action} completed`, 'success');
-                    if (result.stdout) {
-                        appendLogLine(new Date().toLocaleTimeString(), result.stdout);
-                    }
-                } else {
-                    showToast(`Audio ${action} failed: ${result.stderr}`, 'danger');
-                    if (result.stderr) {
-                        appendLogLine(new Date().toLocaleTimeString(), result.stderr);
-                    }
-                }
-            } catch (error) {
-                showToast(`Error: ${error.message}`, 'danger');
-            }
-        }
-
-        async function troubleshootAction(action) {
-            try {
-                showToast(`Running ${action}...`, 'info');
-                const response = await fetch(`/troubleshoot/${action}`);
-                const result = await response.json();
-                
-                if (result.success) {
-                    showToast(`${action} completed`, 'success');
-                    if (result.stdout) {
-                        appendLogLine(new Date().toLocaleTimeString(), result.stdout);
-                    }
-                } else {
-                    showToast(`${action} failed: ${result.stderr}`, 'danger');
-                    if (result.stderr) {
-                        appendLogLine(new Date().toLocaleTimeString(), result.stderr);
-                    }
-                }
-                
-                // Refresh status after troubleshooting actions
-                setTimeout(refreshStatus, 2000);
-            } catch (error) {
-                showToast(`Error: ${error.message}`, 'danger');
-            }
-        }
-
-        function confirmCompleteReset() {
-            const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
-            document.getElementById('confirmModalBody').innerHTML = 
-                '<strong>Warning:</strong> This will stop the service, kill all processes, clean up GPIO, reinstall the service, and start it again. This may take several minutes.';
-            document.getElementById('confirmModalButton').onclick = function() {
-                modal.hide();
-                troubleshootAction('complete-reset');
-            };
-            modal.show();
-        }
-
-        async function runDiagnostics() {
-            try {
-                showToast('Running diagnostics...', 'info');
-                const response = await fetch('/diagnostics');
-                const result = await response.json();
-                
-                const diagnosticsSection = document.getElementById('diagnostics-section');
-                const diagnosticsResults = document.getElementById('diagnostics-results');
-                
-                let html = '';
-                result.diagnostics.forEach(diagnostic => {
-                    html += `
-                        <div class="diagnostic-item">
-                            <div><strong>${diagnostic.name}</strong></div>
-                            <div>${diagnostic.status} ${diagnostic.output}</div>
-                        </div>
-                    `;
                 });
-                
-                diagnosticsResults.innerHTML = html;
-                diagnosticsSection.style.display = 'block';
-                
-                showToast('Diagnostics completed', 'success');
-            } catch (error) {
-                showToast(`Error running diagnostics: ${error.message}`, 'danger');
             }
         }
-
-        async function cleanupLogs() {
-            try {
-                showToast('Cleaning up logs...', 'info');
-                const response = await fetch('/logs/cleanup');
-                const result = await response.json();
-                
-                if (result.success) {
-                    showToast('Logs cleaned up successfully', 'success');
-                    appendLogLine(new Date().toLocaleTimeString(), result.stdout);
-                } else {
-                    showToast(`Log cleanup failed: ${result.stderr}`, 'danger');
+        
+        function disableMotors() {
+            fetch('/motor_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'disable'})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    motorsEnabled = false;
+                    updateMotorStatus();
                 }
-            } catch (error) {
-                showToast(`Error: ${error.message}`, 'danger');
+            });
+        }
+        
+        function emergencyStop() {
+            fetch('/motor_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'stop'})
+            });
+            stopMovement();
+        }
+        
+        // Robot mode control functions
+        function enableRobotMode() {
+            if (confirm('🤖 Enable Robot Mode?\n\nThis will stop desktop audio services for exclusive ReSpeaker access.')) {
+                fetch('/robot_mode/enable', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                })
+                .then(response => response.json())
+                .then(data => {
+                    updateRobotModeStatus(data.success, data.message);
+                })
+                .catch(error => {
+                    console.error('Robot mode enable error:', error);
+                    updateRobotModeStatus(false, 'Failed to enable robot mode');
+                });
             }
         }
+        
+        function disableRobotMode() {
+            if (confirm('🏠 Restore Desktop Audio?\n\nThis will restart audio services for normal desktop use.')) {
+                fetch('/robot_mode/disable', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                })
+                .then(response => response.json())
+                .then(data => {
+                    updateRobotModeStatus(data.success, data.message);
+                })
+                .catch(error => {
+                    console.error('Robot mode disable error:', error);
+                    updateRobotModeStatus(false, 'Failed to disable robot mode');
+                });
+            }
+        }
+        
+        function updateRobotModeStatus(success, message) {
+            const statusEl = document.getElementById('robot-mode-status');
+            const textEl = document.getElementById('robot-mode-text');
+            
+            if (success) {
+                statusEl.className = 'status online';
+                textEl.textContent = message;
+            } else {
+                statusEl.className = 'status offline';
+                textEl.textContent = message || 'Robot mode error';
+            }
+        }
+        
+        function startMovement(direction) {
+            if (!motorsEnabled) {
+                alert('⚠️ Motors are disabled! Enable them first.');
+                return;
+            }
+            
+            currentMovement = direction;
+            const speed = Math.round((currentSpeed / 100) * 4095);
+            
+            fetch('/motor_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    action: 'move',
+                    direction: direction,
+                    speed: speed
+                })
+            });
+        }
+        
+        function stopMovement() {
+            currentMovement = null;
+            fetch('/motor_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'stop'})
+            });
+        }
+        
+        function updateSpeed() {
+            currentSpeed = document.getElementById('speed-slider').value;
+            document.getElementById('speed-value').textContent = currentSpeed;
+        }
+        
+        function toggleOverlays() {
+            fetch('/toggle_overlays', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(response => response.json())
+            .then(data => {
+                const mode = data.overlays_enabled ? 'enabled' : 'disabled';
+                alert(`Overlays ${mode}. Overlays disabled = lower latency.`);
+            });
+        }
+        
+        function checkLatency() {
+            const latencyText = document.getElementById('latency').textContent;
+            const stats = `Current: ${latencyText}\\nServed: ${frameStats.served || 'Unknown'}\\nDropped: ${frameStats.dropped || 'Unknown'}`;
+            alert(`Latency Info:\\n${stats}\\n\\nTips for lower latency:\\n- Disable overlays\\n- Use wired connection\\n- Close other browser tabs`);
+        }
+        
+        function updateMotorStatus() {
+            const statusEl = document.getElementById('motor-status');
+            const statusText = document.getElementById('motor-status-text');
+            
+            if (motorsEnabled) {
+                statusEl.className = 'status enabled';
+                statusText.textContent = 'Motors ENABLED - Ready';
+            } else {
+                statusEl.className = 'status offline';
+                statusText.textContent = 'Motors DISABLED - Safe';
+            }
+        }
+        
+        // Servo control functions
+        function moveServo(axis, delta) {
+            const currentAngle = axis === 'pan' ? parseInt(document.getElementById('pan-value').textContent) : parseInt(document.getElementById('tilt-value').textContent);
+            const newAngle = Math.max(0, Math.min(180, currentAngle + delta));
+            setServoAngle(axis, newAngle);
+        }
+        
+        function setServoAngle(axis, angle = null) {
+            if (angle === null) {
+                angle = axis === 'pan' ? document.getElementById('pan-slider').value : document.getElementById('tilt-slider').value;
+            }
+            
+            fetch('/servo_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    action: axis,
+                    angle: parseInt(angle)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update UI
+                    if (axis === 'pan') {
+                        document.getElementById('pan-value').textContent = data.angle;
+                        document.getElementById('pan-slider').value = data.angle;
+                        document.getElementById('servo-pan').textContent = data.angle + '°';
+                    } else {
+                        document.getElementById('tilt-value').textContent = data.angle;
+                        document.getElementById('tilt-slider').value = data.angle;
+                        document.getElementById('servo-tilt').textContent = data.angle + '°';
+                    }
+                }
+            });
+        }
+        
+        function centerCamera() {
+            fetch('/servo_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'center'})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update UI
+                    document.getElementById('pan-value').textContent = data.pan;
+                    document.getElementById('pan-slider').value = data.pan;
+                    document.getElementById('servo-pan').textContent = data.pan + '°';
+                    
+                    document.getElementById('tilt-value').textContent = data.tilt;
+                    document.getElementById('tilt-slider').value = data.tilt;
+                    document.getElementById('servo-tilt').textContent = data.tilt + '°';
+                }
+            });
+        }
+        
+        // Latency measurement
+        let streamStartTime = performance.now();
+        const videoElement = document.getElementById('video-stream');
+        
+        videoElement.onload = function() {
+            const latency = performance.now() - streamStartTime;
+            document.getElementById('latency').textContent = `Latency: ${latency.toFixed(0)}ms`;
+            streamStartTime = performance.now();
+        };
+        
+        // DOA Visualization
+        function initDOAVisualization() {
+            const canvas = document.getElementById('doa-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Set canvas size
+            canvas.width = 200;
+            canvas.height = 200;
+            
+            return { canvas, ctx };
+        }
+        
+        function drawDOAVisualization(ctx, doaData) {
+            const centerX = 100;
+            const centerY = 100;
+            const radius = 80;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, 200, 200);
+            
+            // Draw outer circle (microphone array)
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+            ctx.stroke();
+            
+            // Draw direction indicators (N, E, S, W)
+            ctx.fillStyle = '#888';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('N', centerX, centerY - radius - 10);
+            ctx.fillText('S', centerX, centerY + radius + 20);
+            ctx.textAlign = 'left';
+            ctx.fillText('E', centerX + radius + 10, centerY + 5);
+            ctx.textAlign = 'right';
+            ctx.fillText('W', centerX - radius - 10, centerY + 5);
+            
+            // Draw center point
+            ctx.fillStyle = '#4CAF50';
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 3, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Draw DOA arrow if voice is detected
+            if (doaData.voice_activity) {
+                const angle = doaData.doa_angle * Math.PI / 180 - Math.PI / 2; // Convert to radians, adjust for canvas coordinates
+                const arrowLength = radius * 0.8;
+                const endX = centerX + Math.cos(angle) * arrowLength;
+                const endY = centerY + Math.sin(angle) * arrowLength;
+                
+                // Draw arrow line
+                ctx.strokeStyle = '#ff6b6b';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(centerX, centerY);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+                
+                // Draw arrow head
+                const headLength = 15;
+                const headAngle = Math.PI / 6;
+                
+                ctx.beginPath();
+                ctx.moveTo(endX, endY);
+                ctx.lineTo(
+                    endX - headLength * Math.cos(angle - headAngle),
+                    endY - headLength * Math.sin(angle - headAngle)
+                );
+                ctx.moveTo(endX, endY);
+                ctx.lineTo(
+                    endX - headLength * Math.cos(angle + headAngle),
+                    endY - headLength * Math.sin(angle + headAngle)
+                );
+                ctx.stroke();
+                
+                // Draw volume indicator (circle size based on volume)
+                const volumeRadius = Math.max(5, Math.min(20, doaData.volume_level / 100));
+                ctx.fillStyle = `rgba(255, 107, 107, ${Math.min(1, doaData.volume_level / 1000)})`;
+                ctx.beginPath();
+                ctx.arc(endX, endY, volumeRadius, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+        
+        // Audio data polling
+        function updateAudioData() {
+            fetch('/audio_data')
+                .then(response => response.json())
+                .then(data => {
+                    const audioStatusEl = document.getElementById('audio-status');
+                    const audioStatusText = document.getElementById('audio-status-text');
+                    
+                    if (data.doa_angle !== undefined) {
+                        audioStatusEl.className = 'status online';
+                        audioStatusText.textContent = 'Audio Online - Live Data';
+                        
+                        // Update DOA angle
+                        document.getElementById('doa-angle').textContent = data.doa_angle.toFixed(0) + '°';
+                        
+                        // Update volume level
+                        document.getElementById('volume-level').textContent = data.volume_db.toFixed(1) + 'dB';
+                        
+                        // Update voice activity
+                        const voiceActivityEl = document.getElementById('voice-activity');
+                        const voiceActivityCard = document.getElementById('voice-activity-card');
+                        
+                        if (data.voice_activity) {
+                            voiceActivityEl.textContent = 'Voice Detected';
+                            voiceActivityEl.style.color = '#4CAF50';
+                            voiceActivityCard.style.borderColor = '#4CAF50';
+                        } else {
+                            voiceActivityEl.textContent = 'No Voice';
+                            voiceActivityEl.style.color = '#666';
+                            voiceActivityCard.style.borderColor = '#666';
+                        }
+                        
+                        // Update DOA visualization
+                        if (window.doaVisualization) {
+                            drawDOAVisualization(window.doaVisualization.ctx, data);
+                        }
+                        
+                    } else {
+                        audioStatusEl.className = 'status offline';
+                        audioStatusText.textContent = 'Audio Offline - No Data';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching audio data:', error);
+                    const audioStatusEl = document.getElementById('audio-status');
+                    const audioStatusText = document.getElementById('audio-status-text');
+                    audioStatusEl.className = 'status offline';
+                    audioStatusText.textContent = 'Audio Error - Connection Failed';
+                });
+        }
+        
+        // IMU data polling
+        function updateIMUData() {
+            fetch('/imu_data')
+                .then(response => response.json())
+                .then(data => {
+                    const statusEl = document.getElementById('imu-status');
+                    const statusText = document.getElementById('status-text');
+                    
+                    // Also fetch frame stats periodically
+                    if (Math.random() < 0.1) { // 10% of the time
+                        fetch('/status')
+                            .then(response => response.json())
+                            .then(statusData => {
+                                frameStats = statusData.frame_stats || frameStats;
+                            });
+                    }
+                    
+                    if (data.status === 'online') {
+                        statusEl.className = 'status online';
+                        statusText.textContent = 'IMU Online - Live Data';
+                        
+                        document.getElementById('roll').textContent = data.euler[0].toFixed(1) + '°';
+                        document.getElementById('pitch').textContent = data.euler[1].toFixed(1) + '°';
+                        document.getElementById('yaw').textContent = data.euler[2].toFixed(1) + '°';
+                        
+                        const accel = Math.sqrt(
+                            data.acceleration[0]**2 + 
+                            data.acceleration[1]**2 + 
+                            data.acceleration[2]**2
+                        );
+                        document.getElementById('accel').textContent = accel.toFixed(2);
+                        
+                        // Update ultrasonic distance
+                        const distance = data.ultrasonic_distance || 0;
+                        const distanceElement = document.getElementById('distance');
+                        const distanceCard = document.getElementById('distance-card');
+                        
+                        distanceElement.textContent = distance.toFixed(2) + 'm';
+                        
+                        // Change color based on distance
+                        if (distance < 0.2) { // Less than 20cm - danger
+                            distanceElement.style.color = '#ff6b6b';
+                            distanceCard.style.borderColor = '#ff6b6b';
+                        } else if (distance < 0.5) { // Less than 50cm - warning
+                            distanceElement.style.color = '#ffd93d';
+                            distanceCard.style.borderColor = '#ffd93d';
+                        } else { // Safe distance
+                            distanceElement.style.color = '#4CAF50';
+                            distanceCard.style.borderColor = '#4CAF50';
+                        }
+                        
+                        updateVisualization(data.euler[0], data.euler[1], data.euler[2]);
+                        
+                        // Update battery information
+                        const batteryStatusEl = document.getElementById('battery-status');
+                        const batteryStatusText = document.getElementById('battery-status-text');
+                        
+                        if (data.battery_percent !== undefined) {
+                            batteryStatusEl.className = 'status online';
+                            batteryStatusText.textContent = 'Battery Online - Live Data';
+                            
+                            document.getElementById('battery-percent').textContent = data.battery_percent + '%';
+                            document.getElementById('battery-voltage').textContent = data.battery_voltage + 'mV';
+                            document.getElementById('battery-current').textContent = data.battery_current + 'mA';
+                            document.getElementById('charging-state').textContent = data.charging_state;
+                            
+                            // Color code battery percentage
+                            const percentElement = document.getElementById('battery-percent');
+                            if (data.battery_percent < 20) {
+                                percentElement.style.color = '#ff6b6b'; // Red for low battery
+                            } else if (data.battery_percent < 50) {
+                                percentElement.style.color = '#ffd93d'; // Yellow for medium
+                            } else {
+                                percentElement.style.color = '#4CAF50'; // Green for good
+                            }
+                        } else {
+                            batteryStatusEl.className = 'status offline';
+                            batteryStatusText.textContent = 'Battery Offline - No Data';
+                        }
+                        
+                        // Update chassis battery information
+                        const chassisBatteryStatusEl = document.getElementById('chassis-battery-status');
+                        const chassisBatteryStatusText = document.getElementById('chassis-battery-status-text');
+                        
+                        if (data.chassis_battery_voltage !== undefined) {
+                            chassisBatteryStatusEl.className = 'status online';
+                            chassisBatteryStatusText.textContent = 'Chassis Battery Online - Live Data';
+                            
+                            document.getElementById('chassis-battery-voltage').textContent = data.chassis_battery_voltage.toFixed(2) + 'V';
+                            document.getElementById('chassis-battery-current').textContent = data.chassis_battery_current.toFixed(2) + 'A';
+                            
+                            // Color code chassis battery voltage
+                            const chassisVoltageElement = document.getElementById('chassis-battery-voltage');
+                            if (data.chassis_battery_voltage < 10) {
+                                chassisVoltageElement.style.color = '#ff6b6b'; // Red for low voltage
+                            } else if (data.chassis_battery_voltage < 12) {
+                                chassisVoltageElement.style.color = '#ffd93d'; // Yellow for medium
+                            } else {
+                                chassisVoltageElement.style.color = '#4CAF50'; // Green for good
+                            }
+                        } else {
+                            chassisBatteryStatusEl.className = 'status offline';
+                            chassisBatteryStatusText.textContent = 'Chassis Battery Offline - No Data';
+                        }
+                        
+                        // Update servo information
+                        const servoStatusEl = document.getElementById('servo-status');
+                        const servoStatusText = document.getElementById('servo-status-text');
+                        
+                        if (data.servo_pan !== undefined && data.servo_tilt !== undefined) {
+                            servoStatusEl.className = 'status online';
+                            servoStatusText.textContent = 'Servos Online - Live Data';
+                            
+                            document.getElementById('servo-pan').textContent = data.servo_pan + '°';
+                            document.getElementById('servo-tilt').textContent = data.servo_tilt + '°';
+                        } else {
+                            servoStatusEl.className = 'status offline';
+                            servoStatusText.textContent = 'Servos Offline - No Data';
+                        }
+                        
+                    } else {
+                        statusEl.className = 'status offline';
+                        statusText.textContent = 'IMU Offline - No Data';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching IMU data:', error);
+                });
+        }
+        
+        // Enhanced keyboard controls
+        let pressedKeys = new Set();
+        
+        document.addEventListener('keydown', function(event) {
+            const key = event.key.toLowerCase();
+            
+            // Prevent default for specific keys
+            if (['w', 's', 'a', 'd', 'q', 'e', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+                event.preventDefault();
+            }
+            
+            // Avoid key repeat
+            if (pressedKeys.has(key)) return;
+            pressedKeys.add(key);
+            
+            // Motor controls (only if motors are enabled)
+            if (motorsEnabled) {
+                switch(key) {
+                    case 'w': startMovement('forward'); break;
+                    case 's': startMovement('backward'); break;
+                    case 'a': startMovement('left'); break;
+                    case 'd': startMovement('right'); break;
+                    case 'q': startMovement('strafe_left'); break;
+                    case 'e': startMovement('strafe_right'); break;
+                    case 'z': startMovement('spin_left'); break;
+                    case 'c': startMovement('spin_right'); break;
+                    case ' ': emergencyStop(); break;
+                }
+            }
+            
+            // Servo controls (always available if servos are connected)
+            switch(key) {
+                case 'arrowleft': moveServo('pan', -5); break;
+                case 'arrowright': moveServo('pan', 5); break;
+                case 'arrowup': moveServo('tilt', -5); break;
+                case 'arrowdown': moveServo('tilt', 5); break;
+                case 'home': centerCamera(); break;
+            }
+            
+            // System controls
+            switch(key) {
+                case 'f1': 
+                    event.preventDefault();
+                    if (motorsEnabled) {
+                        disableMotors();
+                    } else {
+                        enableMotors();
+                    }
+                    break;
+                case 'f2':
+                    event.preventDefault();
+                    emergencyStop();
+                    break;
+                case 'f3':
+                    event.preventDefault();
+                    centerCamera();
+                    break;
+                case 'h':
+                    showKeyboardHelp();
+                    break;
+            }
+        });
+        
+        document.addEventListener('keyup', function(event) {
+            const key = event.key.toLowerCase();
+            pressedKeys.delete(key);
+            
+            // Stop motor movement when motor keys are released
+            if (['w', 's', 'a', 'd', 'q', 'e', 'z', 'c'].includes(key)) {
+                stopMovement();
+            }
+        });
+        
+        // Show keyboard help
+        function showKeyboardHelp() {
+            const helpText = `
+🎮 KEYBOARD CONTROLS:
 
-        // Auto-refresh status every 30 seconds
-        setInterval(refreshStatus, 30000);
+🚗 MOTOR CONTROLS (Motors must be enabled):
+  W - Forward
+  S - Backward  
+  A - Spin Left
+  D - Spin Right
+  Q - Strafe Left
+  E - Strafe Right
+  Z - Spin Left (same as A)
+  C - Spin Right (same as D)
+  SPACE - Emergency Stop
+
+🎥 CAMERA CONTROLS:
+  ← → - Pan Left/Right
+  ↑ ↓ - Tilt Up/Down
+  HOME - Center Camera
+
+⚙️ SYSTEM CONTROLS:
+  F1 - Toggle Motors On/Off
+  F2 - Emergency Stop
+  F3 - Center Camera
+  H - Show this help
+
+⚠️ SAFETY:
+- Motors must be enabled first (F1 or Enable button)
+- Emergency stop with SPACE or F2
+- Camera controls work independently of motor state
+            `;
+            alert(helpText);
+        }
+        
+        // Navigation functions
+        function setAngle(angle) {
+            document.getElementById('nav-angle').value = angle;
+        }
+        
+        function setDistance(distance) {
+            document.getElementById('nav-distance').value = distance;
+        }
+        
+        function startNavigation() {
+            const angle = parseFloat(document.getElementById('nav-angle').value);
+            const distance = parseFloat(document.getElementById('nav-distance').value);
+            
+            if (isNaN(angle) || isNaN(distance)) {
+                alert('Please enter valid angle and distance values');
+                return;
+            }
+            
+            if (distance <= 0) {
+                alert('Distance must be positive');
+                return;
+            }
+            
+            fetch('/navigation_control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    action: 'navigate',
+                    angle: angle,
+                    distance: distance
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('navigation-status-text').textContent = 'Navigating...';
+                    document.getElementById('navigation-status').className = 'status enabled';
+                } else {
+                    alert('Navigation failed: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Navigation error:', error);
+                alert('Navigation request failed');
+            });
+        }
+        
+        function stopNavigation() {
+            fetch('/navigation_control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    action: 'stop'
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('navigation-status-text').textContent = 'Navigation Stopped';
+                    document.getElementById('navigation-status').className = 'status';
+                } else {
+                    alert('Stop navigation failed: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Stop navigation error:', error);
+                alert('Stop navigation request failed');
+            });
+        }
+        
+        function updateNavigationStatus() {
+            fetch('/navigation_status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.available) {
+                        const navStatus = data.navigation_status;
+                        const systemStatus = data.system_status;
+                        
+                        // Update progress bar
+                        const progress = (navStatus.progress * 100).toFixed(1);
+                        document.getElementById('nav-progress-fill').style.width = progress + '%';
+                        document.getElementById('nav-progress-text').textContent = progress + '%';
+                        
+                        // Update navigation info
+                        document.getElementById('nav-current-angle').textContent = navStatus.current_angle.toFixed(1) + '°';
+                        document.getElementById('nav-target-angle').textContent = navStatus.target_angle.toFixed(1) + '°';
+                        document.getElementById('nav-distance-traveled').textContent = navStatus.distance_traveled.toFixed(2) + 'm';
+                        document.getElementById('nav-target-distance').textContent = navStatus.target_distance.toFixed(2) + 'm';
+                        document.getElementById('nav-status-message').textContent = navStatus.status_message;
+                        
+                        // Update status color
+                        const statusElement = document.getElementById('navigation-status');
+                        if (navStatus.active) {
+                            statusElement.className = 'status enabled';
+                            document.getElementById('navigation-status-text').textContent = 'Navigation Active';
+                        } else {
+                            statusElement.className = 'status';
+                            document.getElementById('navigation-status-text').textContent = 'Navigation Ready';
+                        }
+                        
+                        // Show collision warning
+                        if (navStatus.collision_detected) {
+                            statusElement.className = 'status offline';
+                            document.getElementById('navigation-status-text').textContent = 'Collision Detected!';
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Navigation status error:', error);
+                });
+        }
+        
+        // Initialize
+        window.addEventListener('load', () => {
+            initVisualization();
+            updateIMUData();
+            setInterval(updateIMUData, 50); // 20 Hz
+            updateMotorStatus();
+            
+            // Initialize DOA visualization
+            window.doaVisualization = initDOAVisualization();
+            updateAudioData();
+            setInterval(updateAudioData, 100); // 10 Hz for audio data
+            
+            // Initialize navigation status updates
+            updateNavigationStatus();
+            setInterval(updateNavigationStatus, 200); // 5 Hz for navigation status
+        });
+        
+        window.addEventListener('resize', () => {
+            if (renderer && camera) {
+                const container = document.getElementById('imu-visualization');
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            }
+        });
+        
+        // Safety: Stop movement when page loses focus
+        window.addEventListener('blur', stopMovement);
+        window.addEventListener('beforeunload', function() {
+            if (motorsEnabled) {
+                fetch('/motor_control', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: 'stop'})
+                });
+            }
+        });
     </script>
 </body>
 </html> 

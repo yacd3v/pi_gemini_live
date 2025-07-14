@@ -76,6 +76,7 @@ RAW_CH = 6
 # ─── Gemini constants ────────────────────────────────────────────────────────
 #MODEL = "gemini-2.0-flash-live-001"  # Full function calling support
 MODEL = "models/gemini-2.5-flash-preview-native-audio-dialog"  # Better audio quality with unstablefunction calling support
+#MODEL = "models/gemini-2.5-flash-exp-native-audio-thinking-dialog"  # thinking mode test
 # Define tools for the LiveConnectConfig - these are static declarations
 tools_for_config = [
     types.Tool(function_declarations=[
@@ -165,7 +166,8 @@ CONFIG = types.LiveConnectConfig(
     media_resolution="MEDIA_RESOLUTION_LOW",
     speech_config=types.SpeechConfig(
         voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
+            #prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Algenib")
         )
     ),
     system_instruction=types.Content(
@@ -311,8 +313,8 @@ class AudioHandler:
         # Initialize display animator   
         self.anim = DisplayAnimator(self.disp, stop_event=self.sleep_requested_event)
 
-        # Initialize Face Tracker
-        self.face_tracker = FaceTracker(enable_tracking=True, confidence_threshold=0.5)
+        # Initialize Face Tracker with same settings as test for better performance
+        self.face_tracker = FaceTracker(enable_tracking=True, confidence_threshold=0.4)
 
         # Initialize Servo for camera pan/tilt (use face tracker's servo if available)
         if self.face_tracker.servo:
@@ -897,46 +899,175 @@ class AudioHandler:
         """Enable or disable automatic face tracking."""
         return self.face_tracker.toggle_tracking(enabled)
 
-    def _save_debug_image(self, image, target_angles=None):
-        """Save debug image with center lines and target information."""
-        # Convert to BGR for OpenCV operations if needed
-        if len(image.shape) == 3 and image.shape[2] == 3:
-            debug_img = image.copy()
-        else:
-            debug_img = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    def _save_debug_image(self, image, target_angles=None, face_detections=None, tracking_info=None):
+        """Save comprehensive debug image with tracking information."""
+        try:
+            # Convert to BGR for OpenCV operations if needed
+            if len(image.shape) == 3 and image.shape[2] == 3:
+                debug_img = image.copy()
+            else:
+                debug_img = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                
+            h, w = debug_img.shape[:2]
+            center_x, center_y = w // 2, h // 2
             
-        h, w = debug_img.shape[:2]
-        center_x, center_y = w // 2, h // 2
-        
-        # Draw crosshair at center
-        cv2.line(debug_img, (center_x, 0), (center_x, h), (0, 255, 0), 1)
-        cv2.line(debug_img, (0, center_y), (w, center_y), (0, 255, 0), 1)
-        cv2.circle(debug_img, (center_x, center_y), 10, (0, 255, 0), 1)
-        
-        # Add current camera position
-        text = f"Pan: {self.current_pan_angle:.0f}, Tilt: {self.current_tilt_angle:.0f}"
-        cv2.putText(debug_img, text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        
-        # Add target angles if provided
-        if target_angles:
-            pan_rel, tilt_rel = target_angles
-            text = f"Target move: Pan {pan_rel:+.2f}, Tilt {tilt_rel:+.2f}"
-            cv2.putText(debug_img, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            # Draw crosshair at center
+            cv2.line(debug_img, (center_x, 0), (center_x, h), (0, 255, 0), 2)
+            cv2.line(debug_img, (0, center_y), (w, center_y), (0, 255, 0), 2)
+            cv2.circle(debug_img, (center_x, center_y), 15, (0, 255, 0), 2)
             
-            # Draw arrow indicating requested movement
-            arrow_length = 50
-            # Calculate arrow endpoint (scaled and in correct direction)
-            # Note: Pan direction matches new inverted servo control (positive pan = left movement)
-            arrow_x = center_x - int(pan_rel * 5)  # Keep this direction for visualization
-            arrow_y = center_y - int(tilt_rel * 5)  # Negative because lower tilt number = up
-            cv2.arrowedLine(debug_img, (center_x, center_y), (arrow_x, arrow_y), (0, 0, 255), 2)
-        
-        # Save image
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"debug_frame_{timestamp}.jpg"
-        cv2.imwrite(filename, debug_img)
-        print(f"[Debug] Saved debug image to {filename}")
-        return filename
+            # Draw face detections if available
+            if face_detections:
+                for i, face in enumerate(face_detections):
+                    face_x = int(face["center_x"] * w)
+                    face_y = int(face["center_y"] * h)
+                    confidence = face["confidence"]
+                    
+                    # Draw face center
+                    cv2.circle(debug_img, (face_x, face_y), 10, (0, 0, 255), -1)
+                    cv2.circle(debug_img, (face_x, face_y), 15, (0, 0, 255), 2)
+                    
+                    # Draw confidence text
+                    cv2.putText(debug_img, f"Face {i+1}: {confidence:.2f}", 
+                               (face_x - 50, face_y - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    
+                    # Draw keypoints if available
+                    if "keypoints" in face:
+                        keypoints = face["keypoints"]
+                        colors = {
+                            'nose': (255, 0, 0),
+                            'left_eye': (0, 255, 255),
+                            'right_eye': (0, 255, 255),
+                            'left_ear': (255, 255, 0),
+                            'right_ear': (255, 255, 0)
+                        }
+                        
+                        for kp_name, (kp_x, kp_y) in keypoints.items():
+                            px = int(kp_x * w)
+                            py = int(kp_y * h)
+                            color = colors.get(kp_name, (128, 128, 128))
+                            cv2.circle(debug_img, (px, py), 5, color, -1)
+                            cv2.putText(debug_img, kp_name[:3], (px + 5, py - 5), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1)
+                    
+                    # Draw error lines to center
+                    cv2.line(debug_img, (center_x, center_y), (face_x, face_y), (255, 0, 255), 2)
+                    
+                    # Calculate and display error
+                    error_x = (face_x - center_x) / (w / 2)
+                    error_y = (face_y - center_y) / (h / 2)
+                    cv2.putText(debug_img, f"Error: ({error_x:.2f}, {error_y:.2f})", 
+                               (face_x - 50, face_y + 35), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
+            
+            # Add current camera position info
+            text_y = 25
+            cv2.putText(debug_img, f"Pan: {self.current_pan_angle:.1f}deg (limits: {self.face_tracker.pan_limits[0]}-{self.face_tracker.pan_limits[1]})", 
+                       (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            text_y += 25
+            cv2.putText(debug_img, f"Tilt: {self.current_tilt_angle:.1f}deg (limits: {self.face_tracker.tilt_limits[0]}-{self.face_tracker.tilt_limits[1]})", 
+                       (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            text_y += 25
+            
+            # Add tracking info if available
+            if tracking_info:
+                cv2.putText(debug_img, f"Tracking: {tracking_info.get('status', 'Unknown')}", 
+                           (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                text_y += 25
+                if 'smoothed_error' in tracking_info:
+                    sx, sy = tracking_info['smoothed_error']
+                    cv2.putText(debug_img, f"Smoothed Error: ({sx:.3f}, {sy:.3f})", 
+                               (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    text_y += 25
+                if 'history_size' in tracking_info:
+                    cv2.putText(debug_img, f"History: {tracking_info['history_size']} samples", 
+                               (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    text_y += 25
+            
+            # Add target angles if provided (manual movement)
+            if target_angles:
+                pan_rel, tilt_rel = target_angles
+                cv2.putText(debug_img, f"Manual Move: Pan {pan_rel:+.1f}deg, Tilt {tilt_rel:+.1f}deg", 
+                           (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                text_y += 25
+                
+                # Draw arrow indicating requested movement
+                arrow_scale = 3
+                arrow_x = center_x - int(pan_rel * arrow_scale)
+                arrow_y = center_y - int(tilt_rel * arrow_scale)
+                cv2.arrowedLine(debug_img, (center_x, center_y), (arrow_x, arrow_y), (0, 0, 255), 3)
+            
+            # Add face tracking status
+            if hasattr(self, 'face_tracker'):
+                tracking_enabled = self.face_tracker.enable_face_tracking
+                can_track = self.face_tracker.should_auto_track()
+                time_since_manual = time.time() - self.face_tracker.last_manual_movement_time
+                
+                status_color = (0, 255, 0) if tracking_enabled and can_track else (0, 0, 255)
+                cv2.putText(debug_img, f"Auto-Track: {'ON' if tracking_enabled else 'OFF'} | Can Track: {'YES' if can_track else 'NO'}", 
+                           (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+                text_y += 25
+                cv2.putText(debug_img, f"Time since manual: {time_since_manual:.1f}s", 
+                           (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                text_y += 25
+                
+                # Draw tracking history if available
+                if hasattr(self.face_tracker, 'face_history') and self.face_tracker.face_history:
+                    history_color = (255, 128, 0)
+                    for i, (hist_x, hist_y) in enumerate(self.face_tracker.face_history):
+                        hist_px = int(center_x + hist_x * (w / 2))
+                        hist_py = int(center_y + hist_y * (h / 2))
+                        alpha = 0.3 + 0.7 * i / len(self.face_tracker.face_history)  # Fade older points
+                        cv2.circle(debug_img, (hist_px, hist_py), 3, history_color, -1)
+                        cv2.putText(debug_img, f"{i}", (hist_px + 5, hist_py - 5), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, history_color, 1)
+            
+            # Add timestamp
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            cv2.putText(debug_img, timestamp, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Add deadzone visualization
+            if hasattr(self, 'face_tracker'):
+                deadzone = self.face_tracker.tracking_deadzone
+                deadzone_w = int(deadzone * w)
+                deadzone_h = int(deadzone * h)
+                cv2.rectangle(debug_img, 
+                             (center_x - deadzone_w, center_y - deadzone_h),
+                             (center_x + deadzone_w, center_y + deadzone_h),
+                             (128, 128, 128), 2)
+                cv2.putText(debug_img, "Deadzone", (center_x - deadzone_w, center_y - deadzone_h - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (128, 128, 128), 1)
+            
+            # Save image with descriptive filename
+            timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+            
+            # Create filename based on content
+            filename_parts = ["debug", timestamp_str]
+            if face_detections:
+                filename_parts.append(f"faces_{len(face_detections)}")
+                if face_detections:
+                    max_conf = max(f["confidence"] for f in face_detections)
+                    filename_parts.append(f"conf_{max_conf:.2f}")
+            if target_angles:
+                filename_parts.append("manual")
+            if tracking_info:
+                filename_parts.append(f"track_{tracking_info.get('status', 'unk')}")
+            
+            filename = "_".join(filename_parts) + ".jpg"
+            filepath = os.path.join("debug/tracking", filename)
+            
+            cv2.imwrite(filepath, debug_img)
+            print(f"[Debug] Saved debug image to {filepath}")
+            
+            # Also save raw frame for comparison
+            raw_filename = f"raw_{timestamp_str}.jpg"
+            raw_filepath = os.path.join("debug/frames", raw_filename)
+            cv2.imwrite(raw_filepath, image)
+            
+            return filepath
+            
+        except Exception as e:
+            print(f"[Debug] Error saving debug image: {e}")
+            return None
 
     def move_camera(self, pan_relative_angle: float = 0.0, tilt_relative_angle: float = 0.0):
         """Pans or tilts the camera by a specified number of degrees relative to the current position.
@@ -945,24 +1076,33 @@ class AudioHandler:
             pan_relative_angle (float): Degrees to pan. Positive pans left, negative pans right.
             tilt_relative_angle (float): Degrees to tilt. Positive tilts up, negative tilts down.
         """
-        # First, save the latest frame with debug info if we have one
-        try:
-            if hasattr(self, 'last_captured_frame') and self.last_captured_frame is not None:
-                self._save_debug_image(
-                    self.last_captured_frame, 
-                    (pan_relative_angle, tilt_relative_angle)
-                )
-        except Exception as e:
-            print(f"[MoveCamera] Error saving debug image: {e}")
+        # DEBUG IMAGE SAVING DISABLED for main app performance
+        # (Use test_debug_tracking.py for debug images)
+        # try:
+        #     if hasattr(self, 'last_captured_frame') and self.last_captured_frame is not None:
+        #         manual_tracking_info = {
+        #             'status': 'manual_movement',
+        #             'requested_pan': pan_relative_angle,
+        #             'requested_tilt': tilt_relative_angle,
+        #             'current_pan': self.current_pan_angle,
+        #             'current_tilt': self.current_tilt_angle
+        #         }
+        #         self._save_debug_image(
+        #             self.last_captured_frame, 
+        #             target_angles=(pan_relative_angle, tilt_relative_angle),
+        #             tracking_info=manual_tracking_info
+        #         )
+        # except Exception as e:
+        #     print(f"[MoveCamera] Error saving debug image: {e}")
 
         if not self.servo:
             return "Camera control is disabled due to an initialization error."
 
-        # Define limits
-        PAN_MIN = 13  # Left
-        PAN_MAX = 154 # Right
-        TILT_MIN = 36 # Up
-        TILT_MAX = 85 # Down (Note: 90 is base, so lower numbers are more "up")
+        # Define limits - AGGRESSIVE RANGE for maximum tracking
+        PAN_MIN = 0   # Full left range (extended from 5)
+        PAN_MAX = 180 # Full right range (extended from 175)
+        TILT_MIN = 5  # Aggressive up range (extended from 20)
+        TILT_MAX = 115 # Extended down range (extended from 110)
 
         pan_changed = False
         tilt_changed = False
@@ -1180,28 +1320,100 @@ class AudioHandler:
             while not self.sleep_requested_event.is_set():
                 try:
                     # Always capture with metadata if face detection is enabled
+                    face_detections = []
+                    tracking_info = {}
+                    
                     if self.face_tracker.face_detection_enabled:
                         request = cam.capture_request()
                         rgb = request.make_array("main")
                         metadata = request.get_metadata()
                         request.release()
                         
+                        # Parse face detections regardless of tracking status for debug
+                        face_detections = self.face_tracker.parse_face_detection(metadata)
+                        
                         # Perform face detection and tracking regardless of session status
                         if self.face_tracker.should_auto_track():
-                            face_detections = self.face_tracker.parse_face_detection(metadata)
                             if face_detections:
                                 best_face = max(face_detections, key=lambda f: f["confidence"])
                                 print(f"[Vision] Face detected (confidence: {best_face['confidence']:.2f})")
-                                if self.face_tracker.track_face(best_face["center_x"], best_face["center_y"]):
-                                    print(f"[Vision] Auto-tracked face (confidence: {best_face['confidence']:.2f})")
-                                    # Update our current angles to match the face tracker
+                                
+                                # Track the face and get tracking info
+                                tracking_result = self.face_tracker.track_face(best_face["center_x"], best_face["center_y"])
+                                # tracking_result is now always True when a face is being tracked
+                                print(f"[Vision] Tracking face (confidence: {best_face['confidence']:.2f})")
+                                # Update our current angles to match the face tracker
+                                self.current_pan_angle = self.face_tracker.current_pan_angle
+                                self.current_tilt_angle = self.face_tracker.current_tilt_angle
+                                
+                                # Collect tracking info for debug
+                                tracking_info = {
+                                    'status': 'tracking',
+                                    'confidence': best_face['confidence'],
+                                    'history_size': len(self.face_tracker.face_history),
+                                    'target_x': best_face["center_x"],
+                                    'target_y': best_face["center_y"]
+                                }
+                                
+                                # Add smoothed error info if available
+                                if self.face_tracker.face_history:
+                                    # Calculate smoothed error like the tracker does
+                                    frame_width = 640
+                                    frame_height = 480
+                                    target_center_x = best_face["center_x"] * frame_width
+                                    target_center_y = best_face["center_y"] * frame_height
+                                    image_center_x = frame_width / 2
+                                    image_center_y = frame_height / 2
+                                    error_x = (target_center_x - image_center_x) / (frame_width / 2)
+                                    error_y = (target_center_y - image_center_y) / (frame_height / 2)
+                                    
+                                    # Get smoothed values
+                                    weights = [1.0, 1.5, 2.0][:len(self.face_tracker.face_history)]
+                                    total_weight = sum(weights)
+                                    smoothed_error_x = sum(w * pos[0] for w, pos in zip(weights, self.face_tracker.face_history)) / total_weight
+                                    smoothed_error_y = sum(w * pos[1] for w, pos in zip(weights, self.face_tracker.face_history)) / total_weight
+                                    
+                                    tracking_info['smoothed_error'] = (smoothed_error_x, smoothed_error_y)
+                                    tracking_info['raw_error'] = (error_x, error_y)
+                            else:
+                                tracking_info = {
+                                    'status': 'no_face',
+                                    'history_size': len(self.face_tracker.face_history)
+                                }
+                                print("[Vision] No face detected")
+                                
+                                # Handle return to center when no faces detected for a while
+                                current_time = time.time()
+                                if current_time - self.face_tracker.last_target_time > self.face_tracker.no_target_timeout:
+                                    print("[Vision] No face detected for a while, returning to center")
+                                    self.face_tracker._return_to_center()
+                                    # Update our angles to match
                                     self.current_pan_angle = self.face_tracker.current_pan_angle
                                     self.current_tilt_angle = self.face_tracker.current_tilt_angle
-                            else:
-                                print("[Vision] No face detected")
+                        else:
+                            tracking_info = {
+                                'status': 'tracking_disabled',
+                                'reason': 'manual_cooldown' if (time.time() - self.face_tracker.last_manual_movement_time) < self.face_tracker.manual_movement_cooldown else 'disabled'
+                            }
                     else:
                         # Regular capture without metadata
                         rgb = cam.capture_array()
+                        tracking_info = {'status': 'face_detection_disabled'}
+                    
+                    # DEBUG IMAGE SAVING DISABLED for main app performance
+                    # (Use test_debug_tracking.py for debug images)
+                    # should_save_debug = (
+                    #     face_detections or  # Always save when faces detected
+                    #     tracking_info.get('status') == 'tracking' or  # Always save when tracking
+                    #     (hasattr(self, '_debug_frame_counter') and self._debug_frame_counter % 10 == 0)  # Every 10 frames
+                    # )
+                    # 
+                    # if not hasattr(self, '_debug_frame_counter'):
+                    #     self._debug_frame_counter = 0
+                    # self._debug_frame_counter += 1
+                    # 
+                    # if should_save_debug:
+                    #     self._save_debug_image(rgb, face_detections=face_detections, tracking_info=tracking_info)
                     
                     # Store the latest frame for debugging
                     self.last_captured_frame = rgb.copy()

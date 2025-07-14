@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VocalGem Robot Control</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary-color: #4a90e2;
+            --secondary-color: #f39c12;
+            --success-color: #2ecc71;
+            --danger-color: #e74c3c;
+            --warning-color: #f39c12;
+            --info-color: #3498db;
+            --dark-color: #2c3e50;
+            --light-color: #ecf0f1;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            margin: 0;
+            color: #333;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 1rem 0;
+            margin-bottom: 2rem;
+        }
+
+        .control-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .camera-feed {
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+            aspect-ratio: 4/3;
+        }
+
+        .camera-feed img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .camera-offline {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+            font-size: 1.2rem;
+        }
+
+        .movement-controls {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+            margin: 1rem 0;
+        }
+
+        .movement-btn {
+            aspect-ratio: 1;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.5rem;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .movement-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .movement-btn:active {
+            transform: translateY(0);
+        }
+
+        .movement-btn.forward { background: var(--success-color); }
+        .movement-btn.backward { background: var(--info-color); }
+        .movement-btn.left { background: var(--warning-color); }
+        .movement-btn.right { background: var(--warning-color); }
+        .movement-btn.stop { background: var(--danger-color); }
+
+        .sensor-data {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            background: rgba(0, 0, 0, 0.05);
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+
+        .sensor-value {
+            display: flex;
+            justify-content: space-between;
+            margin: 0.2rem 0;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.7);
+        }
+
+        .position-display {
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+            margin: 1rem 0;
+        }
+
+        .position-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .position-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .position-item h6 {
+            margin: 0 0 0.5rem 0;
+            color: #bbb;
+        }
+
+        .position-item .value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: white;
+        }
+
+        .command-input {
+            margin: 1rem 0;
+        }
+
+        .command-input textarea {
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            padding: 0.75rem;
+            font-size: 1rem;
+            resize: vertical;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .status-connected {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .status-disconnected {
+            background: var(--danger-color);
+            color: white;
+        }
+
+        .status-calibrating {
+            background: var(--warning-color);
+            color: white;
+        }
+
+        .compass {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #333 0%, #666 100%);
+            margin: 1rem auto;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+
+        .compass::before {
+            content: '';
+            position: absolute;
+            top: 5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 2px;
+            height: 50px;
+            background: var(--danger-color);
+            border-radius: 2px;
+            transform-origin: bottom center;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .btn-group-vertical .btn {
+            margin: 0.2rem 0;
+        }
+
+        .slide-control {
+            margin: 1rem 0;
+        }
+
+        .slide-control input[type="range"] {
+            width: 100%;
+            margin: 0.5rem 0;
+        }
+
+        .slide-control .value-display {
+            text-align: center;
+            background: rgba(0, 0, 0, 0.1);
+            padding: 0.5rem;
+            border-radius: 5px;
+            margin: 0.5rem 0;
+        }
+
+        @media (max-width: 768px) {
+            .movement-controls {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 0.3rem;
+            }
+            
+            .movement-btn {
+                font-size: 1.2rem;
+            }
+            
+            .position-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <h1 class="mb-0">
+                        <i class="fas fa-robot"></i> VocalGem Robot Control
+                    </h1>
+                </div>
+                <div class="col-md-6 text-end">
+                    <span id="connection-status" class="status-badge status-disconnected">
+                        <i class="fas fa-wifi"></i> Disconnected
+                    </span>
+                    <span id="robot-status" class="status-badge status-disconnected ms-2">
+                        <i class="fas fa-robot"></i> Not Initialized
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="row">
+            <!-- Left Column: Camera and Controls -->
+            <div class="col-lg-8">
+                <!-- Camera Feed -->
+                <div class="control-panel">
+                    <h5><i class="fas fa-video"></i> Camera Feed</h5>
+                    <div class="camera-feed" id="camera-container">
+                        <div class="camera-offline">
+                            <i class="fas fa-video-slash"></i> Camera Offline
+                        </div>
+                        <img id="camera-feed" style="display: none;">
+                    </div>
+                    <div class="mt-3">
+                        <button class="btn btn-primary" id="start-camera">
+                            <i class="fas fa-play"></i> Start Camera
+                        </button>
+                        <button class="btn btn-secondary" id="stop-camera">
+                            <i class="fas fa-stop"></i> Stop Camera
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Movement Controls -->
+                <div class="control-panel">
+                    <h5><i class="fas fa-arrows-alt"></i> Movement Controls</h5>
+                    
+                    <div class="movement-controls">
+                        <div></div>
+                        <button class="movement-btn forward" id="move-forward">
+                            <i class="fas fa-arrow-up"></i>
+                        </button>
+                        <div></div>
+                        
+                        <button class="movement-btn left" id="turn-left">
+                            <i class="fas fa-arrow-left"></i>
+                        </button>
+                        <button class="movement-btn stop" id="emergency-stop">
+                            <i class="fas fa-stop"></i>
+                        </button>
+                        <button class="movement-btn right" id="turn-right">
+                            <i class="fas fa-arrow-right"></i>
+                        </button>
+                        
+                        <div></div>
+                        <button class="movement-btn backward" id="move-backward">
+                            <i class="fas fa-arrow-down"></i>
+                        </button>
+                        <div></div>
+                    </div>
+
+                    <!-- Fine Control Sliders -->
+                    <div class="row mt-3">
+                        <div class="col-md-6">
+                            <div class="slide-control">
+                                <label><i class="fas fa-tachometer-alt"></i> Speed: <span id="speed-value">1000</span></label>
+                                <input type="range" id="speed-slider" min="200" max="2000" value="1000" step="100">
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="slide-control">
+                                <label><i class="fas fa-ruler"></i> Distance: <span id="distance-value">0.5</span>m</label>
+                                <input type="range" id="distance-slider" min="0.1" max="2.0" value="0.5" step="0.1">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Preset Movements -->
+                    <div class="row mt-3">
+                        <div class="col-md-6">
+                            <h6>Quick Distances</h6>
+                            <div class="btn-group-vertical w-100">
+                                <button class="btn btn-outline-primary btn-sm" onclick="executeMove(0.25)">25cm Forward</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="executeMove(0.5)">50cm Forward</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="executeMove(1.0)">1m Forward</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>Quick Turns</h6>
+                            <div class="btn-group-vertical w-100">
+                                <button class="btn btn-outline-warning btn-sm" onclick="executeTurn(45)">45° Right</button>
+                                <button class="btn btn-outline-warning btn-sm" onclick="executeTurn(90)">90° Right</button>
+                                <button class="btn btn-outline-warning btn-sm" onclick="executeTurn(180)">180° Turn</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- High-Level Commands -->
+                <div class="control-panel">
+                    <h5><i class="fas fa-terminal"></i> High-Level Commands</h5>
+                    <div class="command-input">
+                        <textarea id="command-text" class="form-control" rows="3" 
+                                  placeholder="Enter natural language commands like:
+- Move 1 meter forward
+- Turn 90 degrees left
+- Go to position (1.5, 2.0)"></textarea>
+                    </div>
+                    <button class="btn btn-success" id="execute-command">
+                        <i class="fas fa-play"></i> Execute Command
+                    </button>
+                    <div id="command-result" class="mt-2"></div>
+                </div>
+            </div>
+
+            <!-- Right Column: Sensor Data and Status -->
+            <div class="col-lg-4">
+                <!-- Robot Status -->
+                <div class="control-panel">
+                    <h5><i class="fas fa-cog"></i> Robot Status</h5>
+                    <div class="text-center">
+                        <button class="btn btn-success" id="initialize-robot">
+                            <i class="fas fa-power-off"></i> Initialize Robot
+                        </button>
+                        <button class="btn btn-danger" id="shutdown-robot">
+                            <i class="fas fa-power-off"></i> Shutdown Robot
+                        </button>
+                    </div>
+                    <div class="mt-3">
+                        <button class="btn btn-warning w-100" id="reset-position">
+                            <i class="fas fa-home"></i> Reset Position
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Position Display -->
+                <div class="control-panel">
+                    <h5><i class="fas fa-map-marker-alt"></i> Position & Orientation</h5>
+                    <div class="position-display">
+                        <div class="compass" id="compass">
+                            <span id="heading-value">0°</span>
+                        </div>
+                        <div class="position-grid">
+                            <div class="position-item">
+                                <h6>X Position</h6>
+                                <div class="value" id="pos-x">0.00m</div>
+                            </div>
+                            <div class="position-item">
+                                <h6>Y Position</h6>
+                                <div class="value" id="pos-y">0.00m</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- BNO085 Sensor Data -->
+                <div class="control-panel">
+                    <h5><i class="fas fa-microchip"></i> BNO085 Sensor</h5>
+                    <div class="sensor-data" id="sensor-data">
+                        <div class="text-center">
+                            <i class="fas fa-spinner fa-spin"></i> Initialize robot first...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Movement Statistics -->
+                <div class="control-panel">
+                    <h5><i class="fas fa-chart-line"></i> Movement Stats</h5>
+                    <div class="sensor-data" id="movement-stats">
+                        <div class="sensor-value">
+                            <span>Total Distance:</span>
+                            <span id="total-distance">0.00m</span>
+                        </div>
+                        <div class="sensor-value">
+                            <span>Total Rotation:</span>
+                            <span id="total-rotation">0.0°</span>
+                        </div>
+                        <div class="sensor-value">
+                            <span>Commands:</span>
+                            <span id="command-count">0</span>
+                        </div>
+                        <div class="sensor-value">
+                            <span>Status:</span>
+                            <span id="movement-status">idle</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+        
+        // Global variables
+        let robotInitialized = false;
+        let cameraActive = false;
+        let currentSpeed = 1000;
+        let currentDistance = 0.5;
+        
+        // DOM elements
+        const elements = {
+            connectionStatus: document.getElementById('connection-status'),
+            robotStatus: document.getElementById('robot-status'),
+            cameraFeed: document.getElementById('camera-feed'),
+            cameraContainer: document.getElementById('camera-container'),
+            speedSlider: document.getElementById('speed-slider'),
+            speedValue: document.getElementById('speed-value'),
+            distanceSlider: document.getElementById('distance-slider'),
+            distanceValue: document.getElementById('distance-value'),
+            compass: document.getElementById('compass'),
+            headingValue: document.getElementById('heading-value'),
+            posX: document.getElementById('pos-x'),
+            posY: document.getElementById('pos-y'),
+            sensorData: document.getElementById('sensor-data'),
+            movementStats: document.getElementById('movement-stats'),
+            commandText: document.getElementById('command-text'),
+            commandResult: document.getElementById('command-result')
+        };
+
+        // Socket.IO event handlers
+        socket.on('connect', function() {
+            console.log('Connected to server');
+            elements.connectionStatus.innerHTML = '<i class="fas fa-wifi"></i> Connected';
+            elements.connectionStatus.className = 'status-badge status-connected';
+            
+            // Request initial robot status
+            checkRobotStatus();
+            
+            // Start sensor data stream
+            socket.emit('request_sensor_data');
+        });
+
+        socket.on('disconnect', function() {
+            console.log('Disconnected from server');
+            elements.connectionStatus.innerHTML = '<i class="fas fa-wifi"></i> Disconnected';
+            elements.connectionStatus.className = 'status-badge status-disconnected';
+        });
+
+        socket.on('camera_frame', function(data) {
+            if (cameraActive) {
+                elements.cameraFeed.src = 'data:image/jpeg;base64,' + data.frame;
+                elements.cameraFeed.style.display = 'block';
+                elements.cameraContainer.querySelector('.camera-offline').style.display = 'none';
+                
+                // Debug: Log frame reception occasionally
+                if (!window.frameCount) window.frameCount = 0;
+                window.frameCount++;
+                if (window.frameCount % 50 == 0) {
+                    console.log(`Received camera frame ${window.frameCount}, size: ${data.frame.length} chars`);
+                }
+            }
+        });
+
+        socket.on('sensor_data', function(data) {
+            updateSensorDisplay(data);
+        });
+
+        socket.on('command_result', function(data) {
+            showCommandResult(data);
+        });
+
+        socket.on('command_error', function(data) {
+            showCommandResult(data, true);
+        });
+
+        // Control event handlers
+        elements.speedSlider.addEventListener('input', function() {
+            currentSpeed = parseInt(this.value);
+            elements.speedValue.textContent = currentSpeed;
+        });
+
+        elements.distanceSlider.addEventListener('input', function() {
+            currentDistance = parseFloat(this.value);
+            elements.distanceValue.textContent = currentDistance;
+        });
+
+        // Button event handlers
+        document.getElementById('initialize-robot').addEventListener('click', initializeRobot);
+        document.getElementById('shutdown-robot').addEventListener('click', shutdownRobot);
+        document.getElementById('reset-position').addEventListener('click', resetPosition);
+        document.getElementById('start-camera').addEventListener('click', startCamera);
+        document.getElementById('stop-camera').addEventListener('click', stopCamera);
+        document.getElementById('execute-command').addEventListener('click', executeHighLevelCommand);
+
+        // Movement button handlers
+        document.getElementById('move-forward').addEventListener('click', () => executeMove(currentDistance));
+        document.getElementById('move-backward').addEventListener('click', () => executeMove(-currentDistance));
+        document.getElementById('turn-left').addEventListener('click', () => executeTurn(-90));
+        document.getElementById('turn-right').addEventListener('click', () => executeTurn(90));
+        document.getElementById('emergency-stop').addEventListener('click', emergencyStop);
+
+        // Keyboard controls
+        document.addEventListener('keydown', function(event) {
+            if (!robotInitialized) return;
+            
+            switch(event.key) {
+                case 'ArrowUp':
+                case 'w':
+                case 'W':
+                    event.preventDefault();
+                    executeMove(currentDistance);
+                    break;
+                case 'ArrowDown':
+                case 's':
+                case 'S':
+                    event.preventDefault();
+                    executeMove(-currentDistance);
+                    break;
+                case 'ArrowLeft':
+                case 'a':
+                case 'A':
+                    event.preventDefault();
+                    executeTurn(-90);
+                    break;
+                case 'ArrowRight':
+                case 'd':
+                case 'D':
+                    event.preventDefault();
+                    executeTurn(90);
+                    break;
+                case ' ':
+                    event.preventDefault();
+                    emergencyStop();
+                    break;
+            }
+        });
+
+        // API functions
+        async function initializeRobot() {
+            try {
+                const response = await fetch('/api/robot/initialize', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    robotInitialized = true;
+                    elements.robotStatus.innerHTML = '<i class="fas fa-robot"></i> Initialized';
+                    elements.robotStatus.className = 'status-badge status-connected';
+                    showToast('Robot initialized successfully', 'success');
+                } else {
+                    showToast('Failed to initialize robot: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        async function shutdownRobot() {
+            try {
+                const response = await fetch('/api/robot/shutdown', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const result = await response.json();
+                
+                robotInitialized = false;
+                elements.robotStatus.innerHTML = '<i class="fas fa-robot"></i> Not Initialized';
+                elements.robotStatus.className = 'status-badge status-disconnected';
+                showToast('Robot shutdown complete', 'info');
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        async function checkRobotStatus() {
+            try {
+                const response = await fetch('/api/robot/status');
+                const result = await response.json();
+                
+                if (result.initialized) {
+                    robotInitialized = true;
+                    elements.robotStatus.innerHTML = '<i class="fas fa-robot"></i> Initialized';
+                    elements.robotStatus.className = 'status-badge status-connected';
+                    
+                    if (result.pose) {
+                        updatePositionDisplay(result.pose);
+                    }
+                } else {
+                    robotInitialized = false;
+                    elements.robotStatus.innerHTML = '<i class="fas fa-robot"></i> Not Initialized';
+                    elements.robotStatus.className = 'status-badge status-disconnected';
+                }
+            } catch (error) {
+                console.error('Error checking robot status:', error);
+            }
+        }
+
+        async function executeMove(distance) {
+            if (!robotInitialized) {
+                showToast('Robot not initialized', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/robot/move', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        distance: distance,
+                        speed: currentSpeed,
+                        precision: 0.05
+                    })
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    let message = `Moved ${result.actual_distance.toFixed(2)}m in ${result.execution_time.toFixed(1)}s`;
+                    if (result.error_message && result.error_message.includes('Simulated')) {
+                        message += ' (Simulation)';
+                    }
+                    showToast(message, 'success');
+                } else {
+                    showToast('Movement failed: ' + result.error_message, 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        async function executeTurn(angle) {
+            if (!robotInitialized) {
+                showToast('Robot not initialized', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/robot/turn', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        angle: angle,
+                        speed: currentSpeed,
+                        precision: 2.0
+                    })
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    let message = `Turned ${result.actual_angle.toFixed(1)}° in ${result.execution_time.toFixed(1)}s`;
+                    if (result.error_message && result.error_message.includes('Simulated')) {
+                        message += ' (Simulation)';
+                    }
+                    showToast(message, 'success');
+                } else {
+                    showToast('Turn failed: ' + result.error_message, 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        async function emergencyStop() {
+            try {
+                const response = await fetch('/api/robot/stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const result = await response.json();
+                showToast('Emergency stop executed', 'warning');
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        async function resetPosition() {
+            try {
+                const response = await fetch('/api/robot/reset_position', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const result = await response.json();
+                showToast('Position reset to origin', 'info');
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        async function startCamera() {
+            try {
+                const response = await fetch('/api/camera/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    cameraActive = true;
+                    showToast('Camera started', 'success');
+                } else {
+                    showToast('Camera failed to start: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        async function stopCamera() {
+            try {
+                const response = await fetch('/api/camera/stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                
+                cameraActive = false;
+                elements.cameraFeed.style.display = 'none';
+                elements.cameraContainer.querySelector('.camera-offline').style.display = 'flex';
+                showToast('Camera stopped', 'info');
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        function executeHighLevelCommand() {
+            const command = elements.commandText.value.trim();
+            if (!command) {
+                showToast('Please enter a command', 'error');
+                return;
+            }
+            
+            if (!robotInitialized) {
+                showToast('Robot not initialized', 'error');
+                return;
+            }
+            
+            // Send command via WebSocket
+            socket.emit('high_level_command', {command: command});
+            showToast('Executing command: ' + command, 'info');
+        }
+
+        function updateSensorDisplay(data) {
+            if (data.pose) {
+                updatePositionDisplay(data.pose);
+            }
+            
+            if (data.bno085_status) {
+                updateBNO085Display(data.bno085_status, data.system_status);
+            }
+            
+            if (data.movement_stats) {
+                updateMovementStats(data.movement_stats);
+            }
+        }
+
+        function updatePositionDisplay(pose) {
+            // Update position values
+            elements.posX.textContent = pose.position.x.toFixed(2) + 'm';
+            elements.posY.textContent = pose.position.y.toFixed(2) + 'm';
+            
+            // Update compass
+            const heading = pose.heading || 0;
+            elements.headingValue.textContent = heading.toFixed(1) + '°';
+            
+            // Rotate compass needle
+            const compass = elements.compass;
+            const needle = compass.querySelector('::before');
+            if (needle) {
+                compass.style.transform = `rotate(${heading}deg)`;
+            }
+        }
+
+        function updateBNO085Display(status, systemStatus) {
+            if (!status.connected || (systemStatus && systemStatus.simulation_mode)) {
+                elements.sensorData.innerHTML = `
+                    <div class="text-center text-warning mb-2">
+                        <i class="fas fa-simulation"></i> Simulation Mode
+                    </div>
+                    <div class="sensor-value">
+                        <span>Mode:</span>
+                        <span>Simulated Data</span>
+                    </div>
+                    <div class="sensor-value">
+                        <span>Status:</span>
+                        <span class="text-success">Active</span>
+                    </div>
+                    <div class="sensor-value">
+                        <span>Calibration:</span>
+                        <span class="text-success">Perfect (Sim)</span>
+                    </div>
+                    <div class="sensor-value">
+                        <span>Roll:</span>
+                        <span>${status.orientation.roll.toFixed(1)}°</span>
+                    </div>
+                    <div class="sensor-value">
+                        <span>Pitch:</span>
+                        <span>${status.orientation.pitch.toFixed(1)}°</span>
+                    </div>
+                    <div class="sensor-value">
+                        <span>Yaw:</span>
+                        <span>${status.orientation.yaw.toFixed(1)}°</span>
+                    </div>
+                `;
+                return;
+            }
+            
+            const calibration = status.calibration;
+            const orientation = status.orientation;
+            
+            elements.sensorData.innerHTML = `
+                <div class="sensor-value">
+                    <span>Calibration:</span>
+                    <span>${calibration.quality}</span>
+                </div>
+                <div class="sensor-value">
+                    <span>System:</span>
+                    <span>${calibration.status.system}/3</span>
+                </div>
+                <div class="sensor-value">
+                    <span>Gyro:</span>
+                    <span>${calibration.status.gyro}/3</span>
+                </div>
+                <div class="sensor-value">
+                    <span>Accel:</span>
+                    <span>${calibration.status.accel}/3</span>
+                </div>
+                <div class="sensor-value">
+                    <span>Mag:</span>
+                    <span>${calibration.status.mag}/3</span>
+                </div>
+                <div class="sensor-value">
+                    <span>Roll:</span>
+                    <span>${orientation.roll.toFixed(1)}°</span>
+                </div>
+                <div class="sensor-value">
+                    <span>Pitch:</span>
+                    <span>${orientation.pitch.toFixed(1)}°</span>
+                </div>
+                <div class="sensor-value">
+                    <span>Yaw:</span>
+                    <span>${orientation.yaw.toFixed(1)}°</span>
+                </div>
+            `;
+        }
+
+        function updateMovementStats(stats) {
+            document.getElementById('total-distance').textContent = stats.total_distance_traveled.toFixed(2) + 'm';
+            document.getElementById('total-rotation').textContent = stats.total_rotation.toFixed(1) + '°';
+            document.getElementById('command-count').textContent = stats.movement_count;
+            document.getElementById('movement-status').textContent = stats.current_status;
+        }
+
+        function showCommandResult(data, isError = false) {
+            const resultDiv = elements.commandResult;
+            resultDiv.innerHTML = '';
+            
+            if (isError) {
+                resultDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+            } else {
+                if (data.success) {
+                    let message = data.message;
+                    if (data.result && data.result.error_message && data.result.error_message.includes('Simulated')) {
+                        message += ' <small class="text-muted">(Simulation Mode)</small>';
+                    }
+                    resultDiv.innerHTML = `<div class="alert alert-success">${message}</div>`;
+                } else {
+                    resultDiv.innerHTML = `<div class="alert alert-warning">${data.message}</div>`;
+                }
+            }
+            
+            // Clear after 5 seconds
+            setTimeout(() => {
+                resultDiv.innerHTML = '';
+            }, 5000);
+        }
+
+        function showToast(message, type = 'info') {
+            // Create toast element
+            const toast = document.createElement('div');
+            toast.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
+            toast.style.top = '20px';
+            toast.style.right = '20px';
+            toast.style.zIndex = '9999';
+            toast.style.minWidth = '300px';
+            
+            toast.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            document.body.appendChild(toast);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 5000);
+        }
+
+        // Initialize the interface
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('VocalGem Robot Control Interface loaded');
+            
+            // Show welcome message
+            setTimeout(() => {
+                showToast('Welcome to VocalGem Robot Control! Initialize the robot to begin.', 'info');
+            }, 1000);
+        });
+    </script>
+</body>
+</html> 

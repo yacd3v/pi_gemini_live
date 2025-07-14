@@ -28,10 +28,14 @@ if [ "$EUID" -eq 0 ]; then
     ACTUAL_USER=${SUDO_USER:-yannis.achour}
     echo "📦 Installing web UI dependencies as user $ACTUAL_USER..."
     sudo -u $ACTUAL_USER bash -c "cd $PROJECT_DIR && source venv/bin/activate && pip install -r requirements_web.txt"
+    echo "🤖 Installing robot control dependencies..."
+    sudo -u $ACTUAL_USER bash -c "cd $PROJECT_DIR && source venv/bin/activate && pip install picamera2"
 else
     echo "📦 Installing web UI dependencies..."
     source venv/bin/activate
     pip install -r requirements_web.txt
+    echo "🤖 Installing robot control dependencies..."
+    pip install picamera2
 fi
 
 # Get the Raspberry Pi's IP address
