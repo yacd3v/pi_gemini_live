@@ -14,7 +14,7 @@ os.environ['ALSA_PCM_DEVICE'] = '0'
 import numpy as np
 import pyaudio
 import pvporcupine
-from vocal_gemini import AudioHandler
+from main import run_gemini
 
 # LED control imports
 sys.path.append("freenove_examples")
@@ -329,19 +329,7 @@ def extract_beam(data):
         logging.error(f"Data type: {type(data)}, Data length: {len(data) if data else 'None'}")
         return None
 
-async def run_gemini():
-    """Run the Gemini voice assistant"""
-    handler = AudioHandler()
-    try:
-        await handler.run()
-    except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        logging.error(f"Error in Gemini: {e}")
-    finally:
-        handler._cleanup()
-        # Add extra delay to ensure complete cleanup
-        time.sleep(2)
+# run_gemini function is now imported from main.py
 
 # ---------- main ----------
 def main():
